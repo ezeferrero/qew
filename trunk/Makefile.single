@@ -1,0 +1,62 @@
+# Binary file
+BIN = main-phi4
+
+# Flags
+CUDA_INSTALL_PATH       ?= /usr
+CUDASDK_INSTALL_PATH    = /home/ferrero/NVIDIA_GPU_Computing_SDK
+CUDA_LIB_PATH           = $(CUDA_INSTALL_PATH)/lib
+CUDASDK_LIB_PATH        = $(CUDASDK_INSTALL_PATH)/C/lib64
+INCLUDES += -I. -I$(CUDA_INSTALL_PATH)/include -I$(CUDASDK_INSTALL_PATH)/C/common/inc -I$(CUDASDK_INSTALL_PATH)/shared/inc -I/home/ferrero/cuda_libraries/
+LIBS                    = -L$(CUDA_LIB_PATH) -L$(CUDASDK_LIB_PATH)
+CFLAGS                  = -O3
+LDFLAGS                 = -lrt -lm -lcudart -lcufft
+NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
+
+# Default Values
+Lx			= 1024
+Ly			= 1024
+Trun			= 10000
+Tframe			= 100
+TEMP			= 0.01f
+Calpha			= 0.2f
+Cbeta			= 2.0f
+Cgamma			= 0.f
+Cepsilon		= 0.1f
+h_start			= 0.01f
+dhdt			= 0.0f
+t_start			= 0
+
+# Simulation Parameters
+PARAMETERS              = -DLx=$(Lx) -DLy=$(Ly) -DSAMPLES=$(SAMPLES) -DTrun=$(Trun) -DTframe=$(Tframe) -DTEMP=$(TEMP) \
+			-DCalpha=$(Calpha) -DCbeta=$(Cbeta) -DCgamma=$(Cgamma) -DCepsilon=$(Cepsilon) \
+			-Dh_start=$(h_start) -Ddhdt=$(dhdt) -Dt_start=$(t_start)
+
+# Compilers
+NVCC                    = $(CUDA_INSTALL_PATH)/bin/nvcc
+GCC                     = g++
+LINKER                  = g++
+
+# Files
+C_SOURCES               =
+CU_SOURCES              = $(BIN).cu
+HEADERS                 =
+C_OBJS                  = $(patsubst %.c, %.o, $(C_SOURCES))
+CU_OBJS                 = $(patsubst %.cu, %.o, $(CU_SOURCES))
+
+
+# Rules
+$(BIN): clean $(C_OBJS) $(CU_OBJS) $(HEADERS)
+	$(LINKER) -o $(BIN) $(CU_OBJS) $(C_OBJS) $(LDFLAGS) $(INCLUDES) $(LIBS)
+
+$(C_OBJS): $(C_SOURCES) $(HEADERS)
+	$(CC) -c $(C_SOURCES) $(CFLAGS) $(INCLUDES)
+
+$(CU_OBJS): $(CU_SOURCES) $(HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -c $(CU_SOURCES) $(PARAMETERS) $(INCLUDES)
+
+run: $(BIN)
+	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN)  
+
+clean:
+	rm -f $(BIN) *.o *.linkinfo cuda_profile_?.log
+                                                         
