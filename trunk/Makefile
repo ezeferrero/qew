@@ -18,14 +18,14 @@ NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ft
 
 # Default Values
 SAMPLES			= 100
-L			= 4096
-M			= 4096
+L			= 2048
+M			= 8192
 T_RUN			= 100000
 T_DATA			= 10000
 TEMP			= 0.f
-C_BETA			= 1.0f
-C_EPSILON		= 0.35f
-H_START			= 0.05f
+C_BETA			= 1.f
+C_EPSILON		= 1.f
+H_START			= 0.1f
 DHDT			= 0.f
 T_START_FIELD		= 100000
 DT			= 0.05f

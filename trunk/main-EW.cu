@@ -200,64 +200,64 @@ int main(){
 
 		// Time loop, from 0 to T_RUN
 		for(unsigned int time=0;time<T_RUN; time++){
-		    /* get data each T_DATA steps*/
-		    if(time%T_DATA==0) {
-		      
-		      //T.CpyDeviceToHost(); /*we'll use it in a moment*/
-		      
-		      T.GetSplints();
-		      T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando, */
+			/* get data each T_DATA steps*/
+			if(time%T_DATA==0) {
+			      
+				//T.CpyDeviceToHost(); /*we'll use it in a moment*/
+			      
+				T.GetSplints();
+				T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando, */
 
-		      /*incremento temporal*/
-		      T.EulerStep(time);
+				/*incremento temporal*/
+				T.EulerStep(time);
 
-		      //Do some calculation and print
+				//Do some calculation and print
 
-		      //sprintf(filename, "sample%dframe%d.dat", s, 100000000+time);
-		      //ofstream file0(filename);
-		      //T.print_input(file0);
-		      
-		      //T.PrintCenterOfMass(time);
-		      
-		      T.CalculateStructureFactor();
+				//sprintf(filename, "sample%dframe%d.dat", s, 100000000+time);
+				//ofstream file0(filename);
+				//T.print_input(file0);
+			      
+				//T.PrintCenterOfMass(time);
+			      
+				T.CalculateStructureFactor();
 
-		      //sprintf(filename, "sample%dSk%d.dat", s, 100000000+time);
-		      //ofstream file1(filename);
-		      //T.print_structure_factor(file1);
+				//sprintf(filename, "sample%dSk%d.dat", s, 100000000+time);
+				//ofstream file1(filename);
+				//T.print_structure_factor(file1);
 
-		      T.AcumulateStructureFactor(time);
+				T.AcumulateStructureFactor(time);
 
-		    }else{
+			}else{
+		      		T.GetSplints();
+				T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando*/
 
-	      	      T.GetSplints();
-		      T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando*/
-
-		      /*incremento temporal*/
-		      T.EulerStep(time);
-		    }
+				/*incremento temporal*/
+				T.EulerStep(time);
+			}
 		    
-		    /* different field protocols */
-		    //h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
-		    //h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
+			/* different field protocols */
+			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
+			//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
 
-		    //if (i<58000) h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
-		    //if (i>=58000) h_field=-0.018;
+			//if (i<58000) h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
+			//if (i>=58000) h_field=-0.018;
 		    
-		    /*tur it ON at T_START_FIELD*/
-		    if (time>=T_START_FIELD) h_field = H_START + DHDT;
+			/*Increment it at T_START_FIELD*/
+			if (time>=T_START_FIELD) h_field = H_START + DHDT;
 		    
-		    /* field pulses */
-		    //h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
-		    //h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*((i/400)%2)):(H_START);
+			/* field pulses */
+			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
+			//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*((i/400)%2)):(H_START);
 		    
-		    /*constant field*/
-		    // Do nothing, it stays in H_START
+			/*constant field*/
+			// Do nothing, it stays in H_START
+
+			//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));	
 		}
 
-	      sprintf(filename, "StructureFactor.dat");
-	      ofstream file2(filename);
-	      T.print_structure_factor_acum(file2);
-
+		sprintf(filename, "StructureFactor.dat");
+		ofstream file2(filename);
+		T.print_structure_factor_acum(file2);
 	}
 
 

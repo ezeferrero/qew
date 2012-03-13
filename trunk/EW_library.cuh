@@ -21,7 +21,7 @@
 
 using namespace std;
 
-//texture<float,1,cudaReadModeElementType> Etexture;
+//texture<float,1,cudaReadModeElementType> SplineTexture;
 
 __device__ float rand_MWC_normal(unsigned long long* x, const unsigned int* a)
 {
@@ -87,9 +87,16 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, float *d, 
 	for (unsigned int iFrame=0; iFrame<(nx/FRAME1D); iFrame++) {
 		index = tid + FRAME1D*iFrame;
 		
+		unsigned int index_m1 = (index==0)*(nx-1)+(index!=0)*(index-1);
+		unsigned int index_p1 = (index!=(nx-1))*(index+1);
+		//const float elastic_force = C_BETA*(a[(index-1+nx)%nx] -2*a[index] + a[(index+1)%nx]);
+		//const float elastic_force = C_BETA*(a[(index==0)*(nx-1)+(index!=0)*(index-1)] -2*a[index] + a[(index==(nx-1))*0+(index!=(nx-1))*(index+1)]); //better
+		//const float elastic_force = C_BETA*(a[((index==0)?(nx-1):(index-1))] -2*a[index] + a[((index==(nx-1))?(0):(index+1))]); 
+		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]); //even better
+
 		const float pinning_force = C_EPSILON*d[index];
-		const float elastic_force = C_BETA*(a[(index-1+nx)%nx] -2*a[index] + a[(index+1)%nx]);
-//		const float epsilon = tex1Dfetch(Etexture, index);
+		//const float pinning_force = C_EPSILON*tex1Dfetch(SplineTexture, index);
+
 		//b[index] =  elastic_force + xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5) + uniform_field;
 		b[index] =  elastic_force + pinning_force + uniform_field + xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
 	}
@@ -248,7 +255,7 @@ class elastic_system
 
 		for(unsigned int i=0;i<(L/2+1);i++)
 		{
-		fstr << 2*sin(M_PI*i/(float) L) << "  " << setprecision (6) << h_Sk[i] << endl;
+		fstr << 2*sin(M_PI*i/(double) L) << "  " << setprecision (6) << h_Sk[i] << endl;
 		}
 		fstr << endl;
 	};
@@ -259,7 +266,7 @@ class elastic_system
 		for(int t=0; t<(T_RUN/T_DATA); t++){
 			for(unsigned int i=0;i<(L/2+1);i++)
 			{
-			fstr << 2*sin(M_PI*i/(float) L) << "  " << setprecision (6) << h_Sk_acum[t*(L/2+1) + i]/(double) SAMPLES << endl;
+			fstr << 2*sin(M_PI*i/(double) L) << "  " << setprecision (6) << h_Sk_acum[t*(L/2+1) + i]/(double) SAMPLES << endl;
 			}
 			fstr << endl;
 		}
@@ -392,14 +399,8 @@ class elastic_system
 		free(y2);		
 
 		//TODO: Move d_spline to texture memory	    
-		//CUDA_SAFE_CALL(cudaBindTexture(NULL, Etexture, d_disorder, L*M*sizeof(float)));
-	  
-		// testing
-		/*for (int k=1; k<1000; k++){
-		  printf("%i %f\n",k, h_spline[k]);
-		}
-		printf("%f\n",h_spline[(L-1)*M + (M-1)]);
-		*/
+		//CUDA_SAFE_CALL(cudaBindTexture(NULL, SplineTexture, d_spline, L*M*sizeof(float)));
+
 	};
 	
 /*	void init_random(){
