@@ -9,13 +9,13 @@
  *
  *  Created on: Feb 26, 2012
  *      Author: eze
- */
+*/
 
 // NOTE: Not sure how many of the followin libraries are necessary
 #include <cmath>
 #include <stdio.h> /* printf */
 #include <stdlib.h>
-#include <iostream> /*para los printf*/
+//#include <iostream> /*para los printf*/
 #include <iomanip> /*para los printf*/
 #include <fstream> /*para los printf*/
 #include <assert.h>
@@ -23,17 +23,17 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <cufft.h>
 #include "cutil.h" // CUDA_SAFE_CALL, CUT_CHECK_ERROR
+#include <cufft.h>
 /////////////////////////////////
 
 /*Parameter Definitions*/
-#ifndef L
-#define L 512
+#ifndef LL
+#define LL 512
 #endif
 
-#ifndef M
-#define M 256
+#ifndef MM
+#define MM 256
 #endif
 
 #ifndef T_RUN
@@ -53,7 +53,7 @@
 #endif
 
 #ifndef C_EPSILON
-#define C_EPSILON 0.5f	/*magnitud del desorden que se le suma a Calpha, si es 0.f no hay desorden*/
+#define C_EPSILON 1.0f	/*magnitud del desorden que se le suma a Calpha, si es 0.f no hay desorden*/
 #endif
 
 #ifndef C_BETA
@@ -87,7 +87,9 @@
 #define ABS(a) (((a)< 0)?(-a):(a))
 
 // Hardware parameters for GTX 470/480 (GF100)
+#ifndef CUDA_DEVICE
 #define CUDA_DEVICE 0	// card number
+#endif
 #define SHARED_PER_BLOCK 49152
 #define WARP_SIZE 32
 #define THREADS_PER_BLOCK 1024
@@ -100,7 +102,7 @@
 #include "../common/CUDAMCMLrng.cu"
 
 /*for the MWC RNG*/
-#define FRAME1D MIN(L,131072)	// the whole thing should be framed for the RNG if L>2^17
+#define FRAME1D MIN(LL,131072)	// the whole thing should be framed for the RNG if LL>2^17
 #define FRAME2D 256		// the whole thing is framed for the RNG
 #define TILE 128		// each block of threads is a tile
 #define TILE_X 16		// each block of threads is a tile
@@ -123,7 +125,6 @@ __device__ static unsigned long long d_x[NUM_THREADS];
 __device__ static unsigned int d_a[NUM_THREADS];
 
 #include "EW_library.cuh"
-//#include "../common/nrutil.h"
 
 int timeval_subtract (struct timeval *result, struct timeval *x, struct timeval *y);
 
@@ -156,9 +157,9 @@ int main(){
 	assert(FRAME1D%TILE==0);	
 	assert(FRAME2D%TILE_X==0);
 	assert(FRAME2D%TILE_Y==0);
-	assert(L%FRAME1D==0);
-	assert(L%FRAME2D==0);
-	assert(M%FRAME2D==0);
+	assert(LL%FRAME1D==0);
+	assert(LL%FRAME2D==0);
+	assert(MM%FRAME2D==0);
 	assert(T_RUN%T_DATA==0);
 	assert(DT<=0.2);	//We've assumed a small temporal step in the integration scheme
 	
@@ -186,7 +187,7 @@ int main(){
 
 	for(int s=0; s < SAMPLES; s++){
 		/*choose a particular initial condition for the line (made on the host)*/
-	 	T.InitParticular(L);
+	 	T.InitParticular(LL);
 	 	T.CpyHostToDevice();
 
 		/* choose a random initial condition for the line (made on the device)*/
@@ -199,7 +200,7 @@ int main(){
 		float h_field = H_START; 
 
 		// Time loop, from 0 to T_RUN
-		for(unsigned int time=0;time<T_RUN; time++){
+		for(unsigned int time=0;time<T_RUN+1; time++){
 			/* get data each T_DATA steps*/
 			if(time%T_DATA==0) {
 			      
@@ -217,7 +218,7 @@ int main(){
 				//ofstream file0(filename);
 				//T.print_input(file0);
 			      
-				//T.PrintCenterOfMass(time);
+				T.CalculateAccumulateCenterOfMass(time);
 			      
 				T.CalculateStructureFactor();
 
@@ -225,7 +226,7 @@ int main(){
 				//ofstream file1(filename);
 				//T.print_structure_factor(file1);
 
-				T.AcumulateStructureFactor(time);
+				T.AccumulateStructureFactor(time);
 
 			}else{
 		      		T.GetSplints();
@@ -243,7 +244,7 @@ int main(){
 			//if (i>=58000) h_field=-0.018;
 		    
 			/*Increment it at T_START_FIELD*/
-			if (time>=T_START_FIELD) h_field = H_START + DHDT;
+			//if (time>=T_START_FIELD) h_field = H_START + DHDT;
 		    
 			/* field pulses */
 			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
@@ -254,18 +255,24 @@ int main(){
 
 			//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));	
 		}
-
-		sprintf(filename, "StructureFactor.dat");
+		sprintf(filename, "Sk_L%iM%ih%f-aux.dat",LL,MM,H_START);
 		ofstream file2(filename);
 		T.print_structure_factor_acum(file2);
-	}
 
+	}
+	sprintf(filename, "Sk_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
+	ofstream file2(filename);
+	T.print_structure_factor_acum(file2);
+
+	sprintf(filename, "CM_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
+	ofstream file3(filename);
+	T.print_center_of_mass_acum(file3);
 
 	// Stop timer
 	gettimeofday(&end,NULL);
 	timeval_subtract(&elapsed, &end, &start);
 	secs = (double)elapsed.tv_sec + ((double)elapsed.tv_usec*MICROSEC);
-	printf("# Tamaño/Tiempo de ejecucion CUDA %i %i %lf \n", L, M, secs);
+	printf("# Tamaño/Tiempo de ejecucion CUDA %i %i %lf \n", LL, MM, secs);
 	
 	return 0;
 }
