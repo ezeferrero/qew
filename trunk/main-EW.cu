@@ -49,7 +49,7 @@
 #endif
 
 #ifndef DT
-#define DT 0.01f
+#define DT 0.1f
 #endif
 
 #ifndef C_EPSILON
@@ -171,16 +171,27 @@ int main(){
 	double secs = 0.0;
 	struct timeval start = {0L,0L}, end = {0L,0L}, elapsed = {0L,0L};
 
-	//char picturename [100];
-	char filename [200];
-
 	// Start timer
 	gettimeofday(&start, NULL);	
+
+	// print header
+	printf("# L: %i\n", LL);
+	printf("# M: %i\n", MM);
+	printf("# Number of Samples: %i\n", SAMPLES);
+	printf("# Running time (in Euler steps): %i\n", T_RUN);
+	printf("# Data Acquiring Step: %i\n", T_DATA);
+	printf("# beta: %f\n", C_BETA);
+	printf("# epsilon: %f\n", C_EPSILON);
+	printf("# Dt for Euler step: %f\n", DT);
+	printf("# Temperature: %f\n", TEMP);
+	printf("# External field: %f\n", H_START);
 
 	// Initialize the RNGs
 	if (ConfigureRandomNumbers()) {
 		return 1;
 	}
+
+	char filename [200];
 
 	//Our class
 	elastic_system T;
@@ -258,21 +269,24 @@ int main(){
 		sprintf(filename, "Sk_L%iM%ih%f-aux.dat",LL,MM,H_START);
 		ofstream file2(filename);
 		T.print_structure_factor_acum(file2);
+		printf("# unnormalized Structure Factor for %i samples in %s\n", s, filename);
 
 	}
 	sprintf(filename, "Sk_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
 	ofstream file2(filename);
 	T.print_structure_factor_acum(file2);
+	printf("# Structure Factor averaged over %i samples in %s\n", SAMPLES, filename);
 
 	sprintf(filename, "CM_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
 	ofstream file3(filename);
 	T.print_center_of_mass_acum(file3);
+	printf("# Center of Mass position averaged over %i samples in %s\n", SAMPLES, filename);
 
 	// Stop timer
 	gettimeofday(&end,NULL);
 	timeval_subtract(&elapsed, &end, &start);
 	secs = (double)elapsed.tv_sec + ((double)elapsed.tv_usec*MICROSEC);
-	printf("# Tamaño/Tiempo de ejecucion CUDA %i %i %lf \n", LL, MM, secs);
+	printf("# Sistem size / code execution time (in secs) %i %i %lf \n", LL, MM, secs);
 	
 	return 0;
 }

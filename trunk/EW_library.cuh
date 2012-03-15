@@ -21,8 +21,8 @@
 using namespace thrust;
 using namespace std;
 
+//texture<float,1,cudaReadModeElementType> DisorderTexture;
 //texture<float,1,cudaReadModeElementType> SplineTexture;
-
 
 //////////////////// DEVICE FUNCTIONS ////////////////////
 
@@ -56,7 +56,8 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 			// compute index with i and j, the location of the element in the original LL*MM array 
 			int index = i*ny + j;
 			d_disorder[index] = C_EPSILON*(rand_MWC_normal(&rng_state, &rng_const));
-			d_disorder[index] = (d_disorder[index] < 0.99e30 && d_disorder[index] > -0.99e30)*d_disorder[index]; // cut-off for the gaussian numbers, avoid problems 
+			// cut-off for the gaussian random numbers, avoid problems 
+			d_disorder[index] = (d_disorder[index] < 0.99e30 && d_disorder[index] > -0.99e30)*d_disorder[index]; 
 		}
 	}	
 	d_x[tid] = rng_state; // store RNG state into global again		
@@ -66,7 +67,7 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 
 ////////// Evolution functions //////////
 
-__global__ void CudaKernel_RecalculateForce(const float *a, float *b, float *d, float uniform_field, int nx){
+__global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
 	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
 	// move thread RNG state to registers. 
 	unsigned long long rng_state = d_x[tid];
@@ -82,14 +83,13 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, float *d, 
 		//const float elastic_force = C_BETA*(a[(index==0)*(nx-1)+(index!=0)*(index-1)] -2*a[index] + a[(index==(nx-1))*0+(index!=(nx-1))*(index+1)]); //better
 		//const float elastic_force = C_BETA*(a[((index==0)?(nx-1):(index-1))] -2*a[index] + a[((index==(nx-1))?(0):(index+1))]); 
 		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]); //even better
+		//TODO: a factor 1/2 is missing here ??
 
 		const float pinning_force = C_EPSILON*d[index];
-		//assert (pinning_force < 0.99e30);
-		//pinning_force = (pinning_force < 0.99e30)*pinning_force;
-		//const float pinning_force = C_EPSILON*tex1Dfetch(SplineTexture, index);
 
-		//b[index] =  elastic_force + xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5) + uniform_field;
-		b[index] =  elastic_force + pinning_force + uniform_field + xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
+		const float thermal_force = xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
+
+		b[index] =  elastic_force + pinning_force + thermal_force + uniform_field;
 	}
 	d_x[tid] = rng_state; // store RNG state into global again		
 }
@@ -108,7 +108,17 @@ __global__ void CudaKernel_GetSplints(const float *u, const float *disorder, con
 		float B = 1-A;
 		float C = (A*A*A-A)*(jp1-j)*(jp1-j)/6.;
 		float D = (B*B*B-B)*(jp1-j)*(jp1-j)/6.;
+
 		y[i] = A*disorder[index] + B*disorder[index_p1] + C*second_deriv[index] + D*second_deriv[index_p1];
+
+		//TODO: Test Texture Memory usage
+		//DONE: Tested and result slower --> TODO: Guess Why
+		//const float disorderA = tex1Dfetch(DisorderTexture, index);
+		//const float disorderB = tex1Dfetch(DisorderTexture, index_p1);
+		//const float derivC = tex1Dfetch(SplineTexture, index);
+		//const float derivD = tex1Dfetch(SplineTexture, index_p1);
+		//y[i] = A*disorderA + B*disorderB + C*derivC + D*derivD;
+
 	}
 }
 
@@ -411,10 +421,12 @@ class elastic_system
 		CudaKernel_SetDisorder<<<dimGrid, dimBlock>>>(d_disorder,LL,MM);
 		CUDA_SAFE_CALL(cudaMemcpy(h_disorder, d_disorder, sizeof(float)*LL*MM, cudaMemcpyDeviceToHost));
 
+		//TODO: Move d_disorder to texture memory	    
+		//CUDA_SAFE_CALL(cudaUnbindTexture(DisorderTexture));
+		//CUDA_SAFE_CALL(cudaBindTexture(NULL, DisorderTexture, d_disorder, LL*MM*sizeof(float)));
 	};
 
 	void CreateSpline(){
-		//float x[MM],y[MM], y2[MM];
 		float *x, *y, *y2;
 		x = (float *)malloc(sizeof(float)*MM);
 		y = (float *)malloc(sizeof(float)*MM);
@@ -437,7 +449,7 @@ class elastic_system
 
 			spline(x, y, MM, 0., 0., y2);
 
-			y2[MM-1]= y2[0]; //avoid pbc problems, NOT sure about this.
+			y2[MM-1]= y2[0]; //avoid pbc problems, TODO: NOT sure about this.
 	    
 			for (unsigned int j=0; j<MM; j++){
 				h_spline[i*MM + j] = y2[j];
@@ -452,6 +464,7 @@ class elastic_system
 		free(y2);		
 
 		//TODO: Move d_spline to texture memory	    
+		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));
 		//CUDA_SAFE_CALL(cudaBindTexture(NULL, SplineTexture, d_spline, LL*MM*sizeof(float)));
 
 	};
@@ -504,12 +517,12 @@ class elastic_system
 	x1 < x2 < . . . < xN, and given values yp1 and ypn for the first derivative of the interpolating
 	function at points 1 and n, respectively, this routine returns an array y2[1..n] that contains
 	the second derivatives of the interpolating function at the tabulated points xi. If yp1 and/or
-	ypn are equal to 1 × 1030 or larger, the routine is signaled to set the corresponding boundary
+	ypn are equal to 1 × 10^30 or larger, the routine is signaled to set the corresponding boundary
 	condition for a natural spline, with zero second derivative on that boundary.*/
+	// NOTE: x[1..n] logic used by NR was translated to x[0..n-1] in all cases. 
 	{
 		int i,k;
 		float p,qn,sig,un,*u;
-		//u=vector(1,n-1); // I replaced this with the malloc bellow, CHECK!!
 		u = (float *)malloc(sizeof(float)*(n-1));
 		if (yp1 > 0.99e30){ //The lower boundary condition is set either to be “natural”
 			y2[0]=u[0]=0.0;
@@ -518,8 +531,7 @@ class elastic_system
 			u[0]=(3.0/(x[1]-x[0]))*((y[1]-y[0])/(x[1]-x[0])-yp1);
 		}
 
-		for (i=1;i<n-1;i++) { //modified to fit C vectors indexing
-		//for (i=2;i<=n-1;i++) { //This is the decomposition loop of the tridiagonal algorithm. 
+		for (i=1;i<n-1;i++) { //This is the decomposition loop of the tridiagonal algorithm. 
 		// y2 and u are used for temporary storage of the decomposed factors.
 			sig=(x[i]-x[i-1])/(x[i+1]-x[i-1]);
 			p=sig*y2[i-1]+2.0;
@@ -534,10 +546,8 @@ class elastic_system
 			un=(3.0/(x[n-1]-x[n-2]))*(ypn-(y[n-1]-y[n-2])/(x[n-1]-x[n-2]));
 		}
 		y2[n-1]=(un-qn*u[n-2])/(qn*y2[n-2]+1.0);
-		for (k=n-2;k>-1;k--){ //modified to fit C vectors indexing 
-		//for (k=n-1;k>=1;k--) //This is the backsubstitution loop of the tridiagonal algorithm.
+		for (k=n-2;k>-1;k--){ //This is the backsubstitution loop of the tridiagonal algorithm.
 			y2[k]=y2[k]*y2[k+1]+u[k]; 
-			//free_vector(u,1,n-1); // I replaced this with the "free" bellow
 		}
 		free(u);
 	};

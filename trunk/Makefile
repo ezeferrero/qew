@@ -20,16 +20,17 @@ NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ft
 SAMPLES			= 2000
 L			= 2048
 M			= 12288
-T_RUN			= 100000
-T_DATA			= 20000
+T_RUN			= 1000000
+T_DATA			= 200000
 TEMP			= 0.f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 0.7f
+H_START			= 0.1f
 DHDT			= 0.f
 T_START_FIELD		= 2000000
 DT			= 0.05f
-CUDA_DEVICE		= 1
+CUDA_DEVICE		= 0
+OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
 # Simulation Parameters
 PARAMETERS              = -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) -DTEMP=$(TEMP) \
@@ -60,7 +61,7 @@ $(CU_OBJS): $(CU_SOURCES) $(HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -c $(CU_SOURCES) $(PARAMETERS) $(INCLUDES)
 
 run: $(BIN)
-	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) &
+	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) > $(OFILE) &
 #	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) valgrind --tool=memcheck --leak-check=full --track-origins=yes ./$(BIN)  
 
 clean:
