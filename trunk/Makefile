@@ -17,17 +17,15 @@ LDFLAGS                 = -lrt -lm -lcudart -lcufft
 NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
 
 # Default Values
-SAMPLES			= 2000
+SAMPLES			= 20
 L			= 2048
 M			= 12288
-T_RUN			= 1000000
-T_DATA			= 200000
-TEMP			= 0.f
+T_RUN			= 400000
+T_DATA			= 100000
+TEMP			= 0.1f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 0.1f
-DHDT			= 0.f
-T_START_FIELD		= 2000000
+H_START			= 0.8f
 DT			= 0.05f
 CUDA_DEVICE		= 0
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
@@ -35,7 +33,7 @@ OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(
 # Simulation Parameters
 PARAMETERS              = -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) -DTEMP=$(TEMP) \
 			-DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
-			-DH_START=$(H_START) -DDHDT=$(DHDT) -DT_START_FIELD=$(T_START_FIELD) -DDT=$(DT) \
+			-DH_START=$(H_START) -DDT=$(DT) \
 			-DCUDA_DEVICE=$(CUDA_DEVICE)
 
 # Compilers
@@ -61,7 +59,7 @@ $(CU_OBJS): $(CU_SOURCES) $(HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -c $(CU_SOURCES) $(PARAMETERS) $(INCLUDES)
 
 run: $(BIN)
-	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) > $(OFILE) &
+	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) > $(OFILE) & 
 #	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) valgrind --tool=memcheck --leak-check=full --track-origins=yes ./$(BIN)  
 
 clean:

@@ -67,6 +67,34 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 
 ////////// Evolution functions //////////
 
+__global__ void CudaKernel_InterpolateDisorderPotential(const float *u, const float *disorder, const float *second_deriv, float *y, int nx, int ny){
+	int i = blockIdx.x*blockDim.x+threadIdx.x;
+	if ( i < nx ){
+		// from Num. Recepies. Chap 3, sec. 3
+		const float u_aux = fmod(u[i],ny);
+		const unsigned int j = int(u_aux);
+		const unsigned int index = i*ny + j;
+		const unsigned int index_p1 = i*ny + (j+1 != ny)*(j+1); //index_p1 = i*ny + (j+1)%ny;
+		const unsigned int jp1 = j+1;
+
+		const float A = (jp1-u_aux);	// A = (jp1-u_aux)/(jp1-j); 
+		const float B = 1-A; 		// B = 1-A;
+		const float C = (A*A*A-A)/6.; 	// C = (A*A*A-A)*(jp1-j)*(jp1-j)/6.;
+		const float D = (B*B*B-B)/6.; 	// D = (B*B*B-B)*(jp1-j)*(jp1-j)/6.;
+
+		y[i] = A*disorder[index] + B*disorder[index_p1] + C*second_deriv[index] + D*second_deriv[index_p1];
+
+		//TODO: Test Texture Memory usage
+		//DONE: Tested and result slower --> TODO: Guess Why
+		//const float disorderA = tex1Dfetch(DisorderTexture, index);
+		//const float disorderB = tex1Dfetch(DisorderTexture, index_p1);
+		//const float derivC = tex1Dfetch(SplineTexture, index);
+		//const float derivD = tex1Dfetch(SplineTexture, index_p1);
+		//y[i] = A*disorderA + B*disorderB + C*derivC + D*derivD;
+
+	}
+}
+
 __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
 	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
 	// move thread RNG state to registers. 
@@ -76,9 +104,10 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 	unsigned int index;
 	for (unsigned int iFrame=0; iFrame<(nx/FRAME1D); iFrame++) {
 		index = tid + FRAME1D*iFrame;
-		
+
 		unsigned int index_m1 = (index==0)*(nx-1)+(index!=0)*(index-1);
 		unsigned int index_p1 = (index!=(nx-1))*(index+1);
+		
 		//const float elastic_force = C_BETA*(a[(index-1+nx)%nx] -2*a[index] + a[(index+1)%nx]);
 		//const float elastic_force = C_BETA*(a[(index==0)*(nx-1)+(index!=0)*(index-1)] -2*a[index] + a[(index==(nx-1))*0+(index!=(nx-1))*(index+1)]); //better
 		//const float elastic_force = C_BETA*(a[((index==0)?(nx-1):(index-1))] -2*a[index] + a[((index==(nx-1))?(0):(index+1))]); 
@@ -94,33 +123,48 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 	d_x[tid] = rng_state; // store RNG state into global again		
 }
 
-__global__ void CudaKernel_GetSplints(const float *u, const float *disorder, const float *second_deriv, float *y, int nx, int ny){
-	int i = blockIdx.x*blockDim.x+threadIdx.x;
-	if ( i < nx ){
-		// from Num. Recepies. Chap 3, sec. 3
-		float u_aux = fmod(u[i],ny);
-		unsigned int j = int(u_aux);
-		unsigned int index = i*ny + j;
-		//int index_p1 = i*ny + (j+1)%ny;
-		unsigned int index_p1 = i*ny + (j+1 != ny)*(j+1);
-		unsigned int jp1 = j+1;
-		float A = (jp1-u_aux)/(jp1-j); 
-		float B = 1-A;
-		float C = (A*A*A-A)*(jp1-j)*(jp1-j)/6.;
-		float D = (B*B*B-B)*(jp1-j)*(jp1-j)/6.;
+/* // using Shared Memory // does not improve performance as it is now 
+__global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
+	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
+	const unsigned int tidx = threadIdx.x;
+	// move thread RNG state to registers. 
+	unsigned long long rng_state = d_x[tid];
+	const unsigned int rng_const = d_a[tid];
 
-		y[i] = A*disorder[index] + B*disorder[index_p1] + C*second_deriv[index] + D*second_deriv[index_p1];
+	unsigned int index;
+	for (unsigned int iFrame=0; iFrame<(nx/FRAME1D); iFrame++) {
+		index = tid + FRAME1D*iFrame;
 
-		//TODO: Test Texture Memory usage
-		//DONE: Tested and result slower --> TODO: Guess Why
-		//const float disorderA = tex1Dfetch(DisorderTexture, index);
-		//const float disorderB = tex1Dfetch(DisorderTexture, index_p1);
-		//const float derivC = tex1Dfetch(SplineTexture, index);
-		//const float derivD = tex1Dfetch(SplineTexture, index_p1);
-		//y[i] = A*disorderA + B*disorderB + C*derivC + D*derivD;
+		unsigned int index_m1 = (index==0)*(nx-1)+(index!=0)*(index-1);
+		unsigned int index_p1 = (index!=(nx-1))*(index+1);
 
+		__shared__ float as[TILE]; 
+		__shared__ float ds[TILE]; 
+		__shared__ float bs[TILE];
+		as[tidx] = a[index]; 
+		ds[tidx] = d[index]; 
+
+		__syncthreads();		
+
+		const float right = ((tidx<(blockDim.x-1)) ? as[tidx+1]:a[index_p1]); 
+ 		const float left = ((tidx > 0) ? as[tidx-1]:a[index_m1]); 
+		
+		const float elastic_force = C_BETA*(left -2*as[tidx] + right); 
+		//TODO: a factor 1/2 is missing here ??
+
+		const float pinning_force = C_EPSILON*ds[tidx]; 
+
+		const float thermal_force = xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
+
+		bs[tidx] =  elastic_force + pinning_force + thermal_force + uniform_field; 
+
+		__syncthreads(); 
+
+		b[index] = bs[tidx];
 	}
+	d_x[tid] = rng_state; // store RNG state into global again		
 }
+*/
 
 __global__ void CudaKernel_EulerStep(const float *a, float *b, int nx){
 	int idx = blockIdx.x*blockDim.x+threadIdx.x;
@@ -294,7 +338,6 @@ class elastic_system
 
 	void print_structure_factor(ofstream &fstr){
 		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor, d_structure_factor, sizeof(float)*(LL/2+1), cudaMemcpyDeviceToHost));
-
 		for(unsigned int i=0;i<(LL/2+1);i++)
 		{
 		fstr << 2*sin(M_PI*i/(double) LL) << "  " << setprecision (6) << h_structure_factor[i] << endl;
@@ -304,7 +347,6 @@ class elastic_system
 
 	void print_structure_factor_acum(ofstream &fstr){
 		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor_acum, d_structure_factor_acum, sizeof(double)*(T_RUN/T_DATA+1)*(LL/2+1), cudaMemcpyDeviceToHost));
-
 		for(int t=0; t<(T_RUN/T_DATA+1); t++){
 			for(unsigned int i=0;i<(LL/2+1);i++)
 			{
@@ -345,8 +387,7 @@ class elastic_system
 		CUFFT_SAFE_CALL(cufftExecR2C(Sr2c, d_u, d_u_complex));
 		//TODO: check if normalization is needed
 		
-		CUDA_SAFE_CALL(cudaDeviceSynchronize());	
-
+		//CUDA_SAFE_CALL(cudaDeviceSynchronize()); // Not needed. Here only for debug purposes.	
 		CudaKernel_CalculateStructureFactor<<<dimGrid, dimBlock>>>(d_u_complex, d_structure_factor, LL/2+1);
 	};
 
@@ -386,19 +427,18 @@ class elastic_system
 
 	///////// Setup and Update Functions ///////////
 
-	void InitFlat(){ //present by default
-		CUDA_SAFE_CALL(cudaMemset(d_u, 0, LL*sizeof(float)));
+	void InitFlat(float offset){ // value=0 is default
+		CUDA_SAFE_CALL(cudaMemset(d_u, offset, LL*sizeof(float)));
 	};
 	
-	void InitParticular(int nx){
-		for(int i=0;i<nx;i++){
-		
-		//a sinusoidal line
-		h_u[i]= 10 + sin(2*M_PI*i/float(nx));
-		  
-		//a flat line
-		//h_u[i]=10; 
+	void InitParticular(unsigned int nx, int shape, float offset){
+		for(unsigned int i=0;i<nx;i++){
+			//a flat line
+			if (shape==0) h_u[i]= offset; 
+			//a sinusoidal line
+			if (shape==1) h_u[i]= offset + sin(2*M_PI*i/float(nx));
 		}
+	 	CpyHostToDevice();
 	};
 
 	/* transfer the system from CPU to GPU memory */
@@ -410,7 +450,6 @@ class elastic_system
 	void CpyDeviceToHost(){	
 		CUDA_SAFE_CALL(cudaMemcpy(h_u, d_u, sizeof(float)*LL, cudaMemcpyDeviceToHost));
 	};
-
 
 	void SetDisorder(){
 		dim3 dimBlock(TILE_X, TILE_Y);
@@ -446,19 +485,14 @@ class elastic_system
 			for (unsigned int j=0; j<MM; j++){
 				y[j]= h_disorder[i*MM + j];
 			}
-
 			spline(x, y, MM, 0., 0., y2);
-
 			y2[MM-1]= y2[0]; //avoid pbc problems, TODO: NOT sure about this.
-	    
 			for (unsigned int j=0; j<MM; j++){
 				h_spline[i*MM + j] = y2[j];
 			}
-	  
 		}
 	  
 		CUDA_SAFE_CALL(cudaMemcpy(d_spline,h_spline,sizeof(float)*LL*MM, cudaMemcpyHostToDevice));
-	  
 		free(x);
 		free(y);	
 		free(y2);		
@@ -466,7 +500,6 @@ class elastic_system
 		//TODO: Move d_spline to texture memory	    
 		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));
 		//CUDA_SAFE_CALL(cudaBindTexture(NULL, SplineTexture, d_spline, LL*MM*sizeof(float)));
-
 	};
 	
 /*	void init_random(){
@@ -479,13 +512,13 @@ class elastic_system
 	};
 */
 	
-	void GetSplints(){
+	void InterpolateDisorderPotential(){
 		dim3 dimBlock(TILE);
 		dim3 dimGrid(LL/TILE);
 		assert(LL%TILE==0);
 		assert(dimBlock.x<=THREADS_PER_BLOCK);
 		assert(dimGrid.x<=BLOCKS_PER_GRID);
-		CudaKernel_GetSplints<<<dimGrid, dimBlock>>>(d_u, d_disorder, d_spline, d_splint, LL, MM);
+		CudaKernel_InterpolateDisorderPotential<<<dimGrid, dimBlock>>>(d_u, d_disorder, d_spline, d_splint, LL, MM);
 	};
 	
 	void RecalculateForce(float uniform_field, unsigned int t){
@@ -496,9 +529,7 @@ class elastic_system
 		assert(dimGrid.x<=BLOCKS_PER_GRID);
 		
 		CudaKernel_RecalculateForce<<<dimGrid, dimBlock>>>(d_u, d_force, d_splint, uniform_field, LL);
-
-		CUDA_SAFE_CALL(cudaDeviceSynchronize());
-
+		//CUDA_SAFE_CALL(cudaDeviceSynchronize()); // Not needed. Here only for debug purposes.	
 	};
 	
 	void EulerStep(unsigned int t){

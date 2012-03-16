@@ -11,119 +11,114 @@
  *      Author: eze
 */
 
-// NOTE: Not sure how many of the followin libraries are necessary
+// TODO: Not sure how many of the followin libraries are necessary
 #include <cmath>
-#include <stdio.h> /* printf */
+#include <stdio.h> 	/* printf */
 #include <stdlib.h>
-//#include <iostream> /*para los printf*/
-#include <iomanip> /*para los printf*/
-#include <fstream> /*para los printf*/
-#include <assert.h>
-#include <sys/time.h> /* gettimeofday */
+#include <iomanip> 	/* print stuff*/
+#include <fstream> 	/* print stuff*/
+#include <assert.h>	/* assertions */
+#include <sys/time.h> 	/* gettimeofday */
 
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include "cutil.h" // CUDA_SAFE_CALL, CUT_CHECK_ERROR
-#include <cufft.h>
-/////////////////////////////////
+#include "cutil.h"	/* CUDA_SAFE_CALL, CUT_CHECK_ERROR */
+#include <cufft.h>	/* CUDA Fast Fourier Transform Library */
 
 /*Parameter Definitions*/
 #ifndef LL
-#define LL 512
+#define LL 512		/* System's longitudinal size (line size) */
 #endif
 
 #ifndef MM
-#define MM 256
-#endif
-
-#ifndef T_RUN
-#define	T_RUN 1000
-#endif
-
-#ifndef T_DATA
-#define T_DATA 100
+#define MM 1024		/* System's transversal size*/
 #endif
 
 #ifndef SAMPLES
-#define SAMPLES 10
+#define SAMPLES 10	/* Numer of averaged samples */
 #endif
 
-#ifndef DT
-#define DT 0.1f
+#ifndef T_RUN
+#define	T_RUN 1000	/* Running time */
 #endif
 
-#ifndef C_EPSILON
-#define C_EPSILON 1.0f	/*magnitud del desorden que se le suma a Calpha, si es 0.f no hay desorden*/
+#ifndef T_DATA
+#define T_DATA 100	/* Data acquisition time */
 #endif
 
 #ifndef C_BETA
-#define C_BETA 1.0f	/*factor termino Laplaciano phi*/
+#define C_BETA 1.0f	/* Laplacian prefactor */
+#endif
+
+#ifndef C_EPSILON
+#define C_EPSILON 1.0f	/* Intensity of the disorder potential */
 #endif
 
 #ifndef TEMP
-#define TEMP 0.1f
+#define TEMP 0.1f	/* Heat Bath temperature*/
 #endif
-//#define	xtemp sqrt(24.*TEMP*DT)  
-#define	xtemp sqrt(24.*TEMP/DT)
+#define	xtemp sqrt(24.*TEMP/DT) 
+//#define xtemp sqrt(24.*TEMP*DT)
 
 #ifndef H_START
-#define H_START 0.0f
+#define H_START 0.0f	/* Uniform external field */
 #endif
 
 #ifndef DHDT
-#define DHDT 0.1f
+#define DHDT 0.f	/* External field changing rate */
 #endif
 
 #ifndef T_START_FIELD
-#define T_START_FIELD 50
+#define T_START_FIELD 50 /* Time to start changing the field */
 #endif
 
-// Functions (in case they're needed)
-// maximum
-#define MAX(a,b) (((a)<(b))?(b):(a))
-// minimum
-#define MIN(a,b) (((a)<(b))?(a):(b))
-//absolute value
-#define ABS(a) (((a)< 0)?(-a):(a))
+#ifndef DT
+#define DT 0.1f		/* Integration step time */
+#endif
+
+#ifndef CUDA_DEVICE
+#define CUDA_DEVICE 0	/* GPU to be used ID */
+#endif
+
+// Some Functions (just in case)
+#define MAX(a,b) (((a)<(b))?(b):(a))	/* maximum */
+#define MIN(a,b) (((a)<(b))?(a):(b))	/* minimum */ 
+#define ABS(a) (((a)< 0)?(-a):(a))	/* absolute value */
 
 // Hardware parameters for GTX 470/480 (GF100)
-#ifndef CUDA_DEVICE
-#define CUDA_DEVICE 0	// card number
-#endif
 #define SHARED_PER_BLOCK 49152
 #define WARP_SIZE 32
 #define THREADS_PER_BLOCK 1024
 #define BLOCKS_PER_GRID 65535
 
-// Used for cuFFT-1D porpouses
+// Used for cuFFT-1D purposes
 #define BATCH 1
 
-// RNG: multiply with carry
+// RNG: Multiply With Carry
 #include "../common/CUDAMCMLrng.cu"
 
-/*for the MWC RNG*/
+// Parameters to frame the system according to the maximum number of independent MWC RNGs
 #define FRAME1D MIN(LL,131072)	// the whole thing should be framed for the RNG if LL>2^17
 #define FRAME2D 256		// the whole thing is framed for the RNG
 #define TILE 128		// each block of threads is a tile
 #define TILE_X 16		// each block of threads is a tile
 #define TILE_Y 32		// each block of threads is a tile
-
-//TODO: FRAME_X, FRAME_Y and change the following:
 #define NUM_THREADS_2D (FRAME2D*FRAME2D) 
 #define NUM_THREADS_1D (FRAME1D)
 #define NUM_THREADS MAX(NUM_THREADS_1D, NUM_THREADS_2D) 
 #define MICROSEC (1E-6)
 #define SEED time(NULL)
 
-//Good mults files
+// Safe-Primes file used by the MWC RNG
 #define SAFE_PRIMES_FILENAME "../common/safeprimes_base32.txt"
 //#define SAFE_PRIMES_FILENAME "../common/safeprimes_base32_plus.txt"
 
-// state of the random number generator, last number (x_n), last carry (c_n) packed in 64 bits
+// State of the random number generator, last number (x_n), last carry (c_n) packed in 64 bits
 __device__ static unsigned long long d_x[NUM_THREADS];
 // multipliers (constants)
 __device__ static unsigned int d_a[NUM_THREADS];
 
+// Including our functions
 #include "EW_library.cuh"
 
 int timeval_subtract (struct timeval *result, struct timeval *x, struct timeval *y);
@@ -163,10 +158,11 @@ int main(){
 	assert(T_RUN%T_DATA==0);
 	assert(DT<=0.2);	//We've assumed a small temporal step in the integration scheme
 	
-	// set the GPGPU computing device
+	// Set the GPGPU computing device
 	CUDA_SAFE_CALL(cudaSetDevice(CUDA_DEVICE));
 
-	CUDA_SAFE_CALL(cudaThreadSetCacheConfig(cudaFuncCachePreferL1)); // Less Shared Memory, more cache.
+	// Choosing less "shared memory", more cache.
+	CUDA_SAFE_CALL(cudaThreadSetCacheConfig(cudaFuncCachePreferL1)); 
 	
 	double secs = 0.0;
 	struct timeval start = {0L,0L}, end = {0L,0L}, elapsed = {0L,0L};
@@ -174,7 +170,7 @@ int main(){
 	// Start timer
 	gettimeofday(&start, NULL);	
 
-	// print header
+	// Print header
 	printf("# L: %i\n", LL);
 	printf("# M: %i\n", MM);
 	printf("# Number of Samples: %i\n", SAMPLES);
@@ -185,24 +181,26 @@ int main(){
 	printf("# Dt for Euler step: %f\n", DT);
 	printf("# Temperature: %f\n", TEMP);
 	printf("# External field: %f\n", H_START);
+	printf("# SEED used: %i\n", SEED);
 
 	// Initialize the RNGs
 	if (ConfigureRandomNumbers()) {
 		return 1;
 	}
 
+	// main{} variables
 	char filename [200];
 
-	//Our class
+	// Our class
 	elastic_system T;
 
-	for(int s=0; s < SAMPLES; s++){
-		/*choose a particular initial condition for the line (made on the host)*/
-	 	T.InitParticular(LL);
-	 	T.CpyHostToDevice();
+	for(unsigned int s=0; s < SAMPLES; s++){
 
-		/* choose a random initial condition for the line (made on the device)*/
-	 	//T.init_random(); // Not a good idea!!
+		/* Choose a particular initial condition for the line (made on the host)*/
+	 	T.InitParticular(LL, 0, 10.); // InitParticular(L, shape, offset) shape: 0:flat; 1:sinusoidal, ..... more to come
+
+		/* Flat initial condition for the line (made on the device)*/
+	 	//T.InitFlat(1.); // InitFlat(offset)
 
 		/*Initializes the quenched disorder and creates the cubic spline*/
 		T.SetDisorder();
@@ -212,42 +210,39 @@ int main(){
 
 		// Time loop, from 0 to T_RUN
 		for(unsigned int time=0;time<T_RUN+1; time++){
-			/* get data each T_DATA steps*/
-			if(time%T_DATA==0) {
+			/* Get data each T_DATA steps*/
+			if(time%T_DATA==0){
+				// Uncomment visualization is desired
+				/*if(s==0){
+					T.CpyDeviceToHost(); 
+					sprintf(filename, "sample%dframe%d.dat", s, 100000000+time);
+					ofstream file0(filename);
+					T.print_input(file0);
+				}*/
 			      
-				//T.CpyDeviceToHost(); /*we'll use it in a moment*/
-			      
-				T.GetSplints();
-				T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando, */
+				/* Calculate all external forces*/
+				T.InterpolateDisorderPotential();
+				T.RecalculateForce(h_field, time);
 
-				/*incremento temporal*/
+				/* Integration step*/
 				T.EulerStep(time);
 
-				//Do some calculation and print
-
-				//sprintf(filename, "sample%dframe%d.dat", s, 100000000+time);
-				//ofstream file0(filename);
-				//T.print_input(file0);
-			      
+				/* Calculate some quantities*/	
 				T.CalculateAccumulateCenterOfMass(time);
-			      
 				T.CalculateStructureFactor();
-
-				//sprintf(filename, "sample%dSk%d.dat", s, 100000000+time);
-				//ofstream file1(filename);
-				//T.print_structure_factor(file1);
-
 				T.AccumulateStructureFactor(time);
 
 			}else{
-		      		T.GetSplints();
-				T.RecalculateForce(h_field, time); /*Aca le estoy pasando el parametro del campo que va variando*/
+				/* Calculate all external forces*/
+				T.InterpolateDisorderPotential();
+				T.RecalculateForce(h_field, time);
 
-				/*incremento temporal*/
+				/* Integration step*/
 				T.EulerStep(time);
 			}
 		    
-			/* different field protocols */
+			/* Choose external field protocol */
+
 			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
 			//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
 
@@ -266,18 +261,21 @@ int main(){
 
 			//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));	
 		}
-		sprintf(filename, "Sk_L%iM%ih%f-aux.dat",LL,MM,H_START);
+		/* Print Structure Factor in a temporal file after each sample finishes*/
+		sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.tmp",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 		ofstream file2(filename);
 		T.print_structure_factor_acum(file2);
 		printf("# unnormalized Structure Factor for %i samples in %s\n", s, filename);
 
 	}
-	sprintf(filename, "Sk_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
+	/* Print final averages of Structure Factor and Center of Mass position*/
+
+	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file2(filename);
 	T.print_structure_factor_acum(file2);
 	printf("# Structure Factor averaged over %i samples in %s\n", SAMPLES, filename);
 
-	sprintf(filename, "CM_L%iM%ih%fsamples%i.dat",LL,MM,H_START,SAMPLES);
+	sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file3(filename);
 	T.print_center_of_mass_acum(file3);
 	printf("# Center of Mass position averaged over %i samples in %s\n", SAMPLES, filename);
@@ -318,4 +316,3 @@ int timeval_subtract (struct timeval *result, struct timeval *x, struct timeval 
 	/* Return 1 if result is negative. */
 	return x->tv_sec < y->tv_sec;
 }
-
