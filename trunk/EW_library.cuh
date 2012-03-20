@@ -149,7 +149,6 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
  		const float left = ((tidx > 0) ? as[tidx-1]:a[index_m1]); 
 		
 		const float elastic_force = C_BETA*(left -2*as[tidx] + right); 
-		//TODO: a factor 1/2 is missing here ??
 
 		const float pinning_force = C_EPSILON*ds[tidx]; 
 
@@ -609,9 +608,9 @@ class elastic_system
 		for(i=0;i<n;i++){b[i]= 2/3.;}
 		for(i=0;i<n;i++){c[i]= 1/6.;}
 
-		r[0]=y[1]+y[n-1];
-		for(i=1;i<n-1;i++) r[i]=y[i+1]+y[i-1];
-		r[n-1]=y[0]+y[n-2];
+		r[0] = y[1] -2*y[0] + y[n-1];
+		for(i=1;i<n-1;i++) r[i] = y[i+1] -2*y[i] +y[i-1];
+		r[n-1] = y[0] -2*y[n-1] +y[n-2];
 
 		float alpha = c[0];
 		float beta = a[0];
