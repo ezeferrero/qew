@@ -17,15 +17,15 @@ LDFLAGS                 = -lrt -lm -lcudart -lcufft
 NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
 
 # Default Values
-SAMPLES			= 20
+SAMPLES			= 100
 L			= 2048
 M			= 12288
 T_RUN			= 400000
 T_DATA			= 100000
-TEMP			= 0.1f
+TEMP			= 0.f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 0.8f
+H_START			= 1.1f
 DT			= 0.05f
 CUDA_DEVICE		= 0
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat

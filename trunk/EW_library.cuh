@@ -112,7 +112,6 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 		//const float elastic_force = C_BETA*(a[(index==0)*(nx-1)+(index!=0)*(index-1)] -2*a[index] + a[(index==(nx-1))*0+(index!=(nx-1))*(index+1)]); //better
 		//const float elastic_force = C_BETA*(a[((index==0)?(nx-1):(index-1))] -2*a[index] + a[((index==(nx-1))?(0):(index+1))]); 
 		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]); //even better
-		//TODO: a factor 1/2 is missing here ??
 
 		const float pinning_force = C_EPSILON*d[index];
 
@@ -258,7 +257,7 @@ class elastic_system
 	// intializing the class
 	elastic_system(){
       
-		//allocating memory for the system array in host and device (line)
+		//allocating memory for the system array in host and device (vector)
 		h_u = (float *)malloc(sizeof(float)*LL);
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_u, sizeof(float)*LL));
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_u_complex, sizeof(cufftComplex)*(LL/2+1)*BATCH));		
@@ -269,7 +268,7 @@ class elastic_system
 		h_spline = (float *)malloc(sizeof(float)*LL*MM);		
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_spline, sizeof(float)*LL*MM));
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_splint, sizeof(float)*LL));
-		//allocating memory for the force (line)
+		//allocating memory for the force (vector)
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_force, sizeof(float)*LL));
 		//allocating memory for the Structure Factor
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_structure_factor, sizeof(float)*(LL/2+1)));
@@ -281,7 +280,7 @@ class elastic_system
 		h_center_mass = (double *)malloc(sizeof(double)*(T_RUN/T_DATA+1));		
 
 
-		/*Fill everithing with 0's*/
+		/* Fill everything with 0s */
 		CUDA_SAFE_CALL(cudaMemset(d_u, 0, LL*sizeof(float)));
 		CUDA_SAFE_CALL(cudaMemset(d_u_complex, 0, (LL/2+1)*sizeof(cufftComplex)));
 		if ( cudaGetLastError ( ) != cudaSuccess ) {
@@ -485,8 +484,9 @@ class elastic_system
 			for (unsigned int j=0; j<MM; j++){
 				y[j]= h_disorder[i*MM + j];
 			}
-			spline(x, y, MM, 0., 0., y2);
-			y2[MM-1]= y2[0]; //avoid pbc problems, TODO: NOT sure about this.
+			//spline(x, y, MM, 0., 0., y2); // poner 
+			//y2[MM-1]= y2[0]; //avoid pbc problems, TODO: NOT sure about this.
+			periodic_spline(y,MM,y2);
 			for (unsigned int j=0; j<MM; j++){
 				h_spline[i*MM + j] = y2[j];
 			}
@@ -542,6 +542,84 @@ class elastic_system
 		CudaKernel_EulerStep<<<dimGrid, dimBlock>>>(d_force, d_u, LL);
 	};
 	
+
+	void cyclic(float *a, float *b, float *c, float alpha, float beta, float *r, float *x, unsigned int n)
+	//Solves for a vector x[1..n] the \cyclic" set of linear equations given by equation (2.7.9). a, b, c, and 
+	//r are input vectors, all dimensioned as [1..n], while alpha and beta are the corner
+	//entries in the matrix. The input is not modified.
+	{
+		//void tridag(float *a, float *b, float *c, float *r, float *u, unsigned int n);
+		unsigned int i;
+		float fact,gamma,*bb,*u,*z;
+
+		//if (n <= 2) nrerror("n too small in cyclic");
+		bb = (float *)malloc(sizeof(float)*(n));
+		u = (float *)malloc(sizeof(float)*(n));
+		z = (float *)malloc(sizeof(float)*(n));
+		gamma = -b[0]; 							//Avoid subtraction error in forming bb[1].
+		bb[0]=b[0]-gamma; 						//Set up the diagonal of the modified tridiagonal system.
+		bb[n-1]=b[n-1]-alpha*beta/gamma; 
+		for (i=1;i<n-1;i++) bb[i]=b[i];
+		tridag(a,bb,c,r,x,n);			 			//Solve A . x = r.
+		u[0]=gamma; 							//Set up the vector u.
+		u[n-1]=alpha;
+		for (i=1;i<n-1;i++) u[i]=0.0;
+		tridag(a,bb,c,u,z,n); 						//Solve A . z = u.
+		fact=(x[0]+beta*x[n-1]/gamma)/(1.0+z[0]+beta*z[n-1]/gamma);		//Form v . x=(1 + v . z).
+		for (i=0;i<=n-1;i++) x[i] -= fact*z[i]; 				//Now get the solution vector x.
+		free(z);
+		free(u);
+		free(bb);
+	}
+
+
+	void tridag(const float *a, const float *b, const float *c, const float *r, float *u, unsigned int n)
+		//Solves for a vector u[1..n] the tridiagonal linear set given by equation (2.4.1). a[1..n],
+		//b[1..n], c[1..n], and r[1..n] are input vectors and are not modified.
+		{
+		int j;
+		float bet,*gam;
+		gam = (float *)malloc(sizeof(float)*(n)); //One vector of workspace, gam is needed.
+		//if (b[1] == 0.0) nrerror("Error 1 in tridag");
+		//If this happens then you should rewrite your equations as a set of order N − 1, with u2 trivially eliminated.
+		u[0]=r[0]/(bet=b[0]);
+		for (j=1;j<n;j++) { 						//Decomposition and forward substitution.
+			gam[j]=c[j-1]/bet;
+			bet=b[j]-a[j]*gam[j];
+			//if (bet == 0.0) nrerror("Error 2 in tridag"); 	//Algorithm fails; see below.
+			u[j]=(r[j]-a[j]*u[j-1])/bet;
+		}
+		for (j=(n-2);j>-1;j--){
+			u[j] -= gam[j+1]*u[j+1]; 		//Backsubstitution.
+		}
+		free(gam);
+	}
+
+
+	void periodic_spline(float *y, unsigned int n, float *y2){
+
+		float *a, *b, *c, *r;		
+		a = (float *)malloc(sizeof(float)*(n));
+		b = (float *)malloc(sizeof(float)*(n));
+		c = (float *)malloc(sizeof(float)*(n));
+		r = (float *)malloc(sizeof(float)*(n));
+		
+		unsigned int i;
+		for(i=0;i<n;i++){a[i]= 1/6.;}
+		for(i=0;i<n;i++){b[i]= 2/3.;}
+		for(i=0;i<n;i++){c[i]= 1/6.;}
+
+		r[0]=y[1]+y[n-1];
+		for(i=1;i<n-1;i++) r[i]=y[i+1]+y[i-1];
+		r[n-1]=y[0]+y[n-2];
+
+		float alpha = c[0];
+		float beta = a[0];
+		cyclic(a,b,c,alpha,beta,r,y2,n);
+
+		free(a); free(b); free(c); free(r);
+	}
+
 	/*FROM NUMERICAL RECEPIES*/
 	void spline(float *x, float *y, int n, float yp1, float ypn, float *y2)
 	/*Given arrays x[1..n] and y[1..n] containing a tabulated function, i.e., yi = f(xi), with
@@ -586,12 +664,12 @@ class elastic_system
 	/////////////// Clean Memory ////////////////
 	~elastic_system(){
 		cufftDestroy(Sr2c);
-		cudaFree(d_u);
-		cudaFree(d_force);
-		cudaFree(d_disorder);
-		cudaFree(d_spline);
-		free(h_u);
-	
+		cudaFree(d_u); cudaFree(d_u_complex); 
+		cudaFree(d_disorder); cudaFree(d_spline); cudaFree(d_splint); cudaFree(d_force);
+		cudaFree(d_structure_factor); cudaFree(d_structure_factor_acum);
+		free(h_u); 
+		free(h_disorder); free(h_spline); 
+		free(h_structure_factor); free(h_structure_factor_acum); free(h_center_mass);
 	};
 
 };
