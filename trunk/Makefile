@@ -17,23 +17,24 @@ LDFLAGS                 = -lrt -lm -lcudart -lcufft
 NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
 
 # Default Values
-SAMPLES			= 100
-L			= 2048
-M			= 12288
-T_RUN			= 400000
+SAMPLES			= 1
+L			= 16384
+M			= 32768
+T_RUN			= 1000000
 T_DATA			= 100000
+SPACING			= LOGARITHMIC	#LINEAR
 TEMP			= 0.f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 1.1f
-DT			= 0.05f
-CUDA_DEVICE		= 0
+H_START			= 2.5f
+DT			= 0.1f
+CUDA_DEVICE		= 1
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
 # Simulation Parameters
 PARAMETERS              = -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) -DTEMP=$(TEMP) \
 			-DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
-			-DH_START=$(H_START) -DDT=$(DT) \
+			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING)\
 			-DCUDA_DEVICE=$(CUDA_DEVICE)
 
 # Compilers

@@ -108,6 +108,7 @@
 #define NUM_THREADS MAX(NUM_THREADS_1D, NUM_THREADS_2D) 
 #define MICROSEC (1E-6)
 #define SEED time(NULL)
+//#define SEED 1332277027
 
 // Safe-Primes file used by the MWC RNG
 #define SAFE_PRIMES_FILENAME "../common/safeprimes_base32.txt"
@@ -190,57 +191,90 @@ int main(){
 
 	// main{} variables
 	char filename [200];
+	float h_field;
 
 	// Our class
 	elastic_system T;
 
 	for(unsigned int s=0; s < SAMPLES; s++){
 
+		// variables
+		h_field = H_START; 
+
 		/* Choose a particular initial condition for the line (made on the host)*/
-	 	T.InitParticular(LL, 0, 10.); // InitParticular(L, shape, offset) shape: 0:flat; 1:sinusoidal, ..... more to come
+		T.InitParticular(LL, 0, 0.); // InitParticular(L, shape, offset) shape: 0:flat; 1:sinusoidal, ..... more to come
 
 		/* Flat initial condition for the line (made on the device)*/
-	 	//T.InitFlat(1.); // InitFlat(offset)
+		//T.InitFlat(1.); // InitFlat(offset)
 
 		/*Initializes the quenched disorder and creates the cubic spline*/
 		T.SetDisorder();
 		T.CreateSpline();
 
-		float h_field = H_START; 
+		//ofstream disorderfile("disorder.dat");
+		//T.PrintDisorder(disorderfile);
 
+		#ifdef LOGARITHMIC
+		int getdata=1;
+		#endif	
 		// Time loop, from 0 to T_RUN
 		for(unsigned int time=0;time<T_RUN+1; time++){
 			/* Get data each T_DATA steps*/
+			#ifdef LINEAR
 			if(time%T_DATA==0){
+			#endif
+			#ifdef LOGARITHMIC
+			if(time%getdata==0){
+			#endif
 				// Uncomment visualization is desired
-				/*if(s==0){
+				if(s==0){
 					T.CpyDeviceToHost(); 
-					sprintf(filename, "sample%dframe%d.dat", s, 100000000+time);
+					sprintf(filename, "U_frame%dL%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat", \
+					10000000+time,LL,MM,SAMPLES,T_RUN,T_DATA, TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 					ofstream file0(filename);
-					T.print_input(file0);
-				}*/
-			      
+					T.PrintLine(file0);
+				}
+			
 				/* Calculate all external forces*/
-				T.InterpolateDisorderPotential();
+				T.InterpolateDisorderSpline();
 				T.RecalculateForce(h_field, time);
 
 				/* Integration step*/
 				T.EulerStep(time);
 
 				/* Calculate some quantities*/	
+				#ifdef LINEAR
 				T.CalculateAccumulateCenterOfMass(time);
 				T.CalculateStructureFactor();
 				T.AccumulateStructureFactor(time);
+				#endif
+				
+				#ifdef LOGARITHMIC
+				//T.CalculateCenterOfMass();
+				T.CalculateStructureFactor();
+				#endif
+				
+				/* Print Structure Factor if desired*/
+				if(s==0){
+					sprintf(filename, "Sk_frame%dL%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat", \
+					10000000+time,LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+					ofstream file2(filename);
+					T.PrintStructureFactor(file2);
+				}
+
+				#ifdef LOGARITHMIC
+				getdata*=10;
+				#endif
 
 			}else{
 				/* Calculate all external forces*/
-				T.InterpolateDisorderPotential();
+				T.InterpolateDisorderSpline();
 				T.RecalculateForce(h_field, time);
 
 				/* Integration step*/
 				T.EulerStep(time);
 			}
-		    
+			
 			/* Choose external field protocol */
 
 			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
@@ -248,36 +282,40 @@ int main(){
 
 			//if (i<58000) h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
 			//if (i>=58000) h_field=-0.018;
-		    
+			
 			/*Increment it at T_START_FIELD*/
 			//if (time>=T_START_FIELD) h_field = H_START + DHDT;
-		    
+			
 			/* field pulses */
 			//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
 			//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*((i/400)%2)):(H_START);
-		    
+		
 			/*constant field*/
 			// Do nothing, it stays in H_START
 
 			//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));	
 		}
-		/* Print Structure Factor in a temporal file after each sample finishes*/
-		sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.tmp",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
-		ofstream file2(filename);
-		T.print_structure_factor_acum(file2);
-		printf("# unnormalized Structure Factor for %i samples in %s\n", s, filename);
+			/* Print Structure Factor in a temporal file after each sample finishes*/
+		/*	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.tmp",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+			ofstream file2(filename);
+			T.PrintStructureFactorAcum(file2);
+			printf("# unnormalized Structure Factor for %i samples in %s\n", s, filename);
+		*/
+
+
 
 	}
+
 	/* Print final averages of Structure Factor and Center of Mass position*/
 
 	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file2(filename);
-	T.print_structure_factor_acum(file2);
+	T.PrintStructureFactorAcum(file2);
 	printf("# Structure Factor averaged over %i samples in %s\n", SAMPLES, filename);
 
 	sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file3(filename);
-	T.print_center_of_mass_acum(file3);
+	T.PrintCenterOfMassAcum(file3);
 	printf("# Center of Mass position averaged over %i samples in %s\n", SAMPLES, filename);
 
 	// Stop timer

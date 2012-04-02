@@ -67,6 +67,7 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 
 ////////// Evolution functions //////////
 
+/*
 __global__ void CudaKernel_InterpolateDisorderPotential(const float *u, const float *disorder, const float *second_deriv, float *y, int nx, int ny){
 	int i = blockIdx.x*blockDim.x+threadIdx.x;
 	if ( i < nx ){
@@ -94,6 +95,27 @@ __global__ void CudaKernel_InterpolateDisorderPotential(const float *u, const fl
 
 	}
 }
+*/
+
+__global__ void CudaKernel_InterpolateDisorderSpline(const float *u, const float *disorder, const float *second_deriv, float *y, int nx, int ny){
+	int tid = blockIdx.x*blockDim.x+threadIdx.x;
+	if ( tid < nx ){
+		// from Num. Recepies. Chap 3, sec. 3
+		const float u_aux = u[tid] - floor(u[tid]/ny)*ny;
+		//const float u_aux = fmod(u[tid],ny);
+		const unsigned int j = int(u_aux);
+		const unsigned int index = tid*ny + j;
+		const unsigned int index_p1 = tid*ny + (j+1 != ny)*(j+1); //index_p1 = i*ny + (j+1)%ny;
+		const unsigned int jp1 = j+1;
+
+		const float A = (jp1-u_aux);	// A = (jp1-u_aux)/(jp1-j); 
+		const float B = 1-A; 		// B = 1-A;
+	
+		y[tid] = -(disorder[index_p1] - disorder[index] - ((3*A*A-1)/6.)* second_deriv[index] + ((3*B*B-1)/6.)* second_deriv[index_p1]) ;
+
+	}
+}
+
 
 __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
 	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
@@ -326,29 +348,29 @@ class elastic_system
 
 	//////////// Print functions ////////////
 
-	void print_input(ofstream &fstr){
+	void PrintLine(ofstream &fstr){
 		for(unsigned int i=0;i<LL;i++)
 		{
-		fstr << i << "  " << setprecision (4) << h_u[i] << endl;
+		fstr << i << "  " << h_u[i] << endl;
 		}
 		fstr << endl;
 	};
 
-	void print_structure_factor(ofstream &fstr){
+	void PrintStructureFactor(ofstream &fstr){
 		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor, d_structure_factor, sizeof(float)*(LL/2+1), cudaMemcpyDeviceToHost));
-		for(unsigned int i=0;i<(LL/2+1);i++)
+		for(unsigned int i=1;i<(LL/2+1);i++)
 		{
-		fstr << 2*sin(M_PI*i/(double) LL) << "  " << setprecision (6) << h_structure_factor[i] << endl;
+		fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor[i] << endl;
 		}
 		fstr << endl;
 	};
 
-	void print_structure_factor_acum(ofstream &fstr){
+	void PrintStructureFactorAcum(ofstream &fstr){
 		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor_acum, d_structure_factor_acum, sizeof(double)*(T_RUN/T_DATA+1)*(LL/2+1), cudaMemcpyDeviceToHost));
 		for(int t=0; t<(T_RUN/T_DATA+1); t++){
-			for(unsigned int i=0;i<(LL/2+1);i++)
+			for(unsigned int i=1;i<(LL/2+1);i++)
 			{
-			fstr << 2*sin(M_PI*i/(double) LL) << "  " << setprecision (6) << h_structure_factor_acum[t*(LL/2+1) + i]/(double) SAMPLES << endl;
+			fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor_acum[t*(LL/2+1) + i]/(double) SAMPLES << endl;
 			}
 			fstr << endl;
 		}
@@ -356,15 +378,27 @@ class elastic_system
 
 	};
 
-	void print_center_of_mass_acum(ofstream &fstr){
+	void PrintCenterOfMassAcum(ofstream &fstr){
 		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
 		for(int t=0; t<(T_RUN/T_DATA+1); t++){
-			fstr << t*T_DATA << "  " << setprecision (6) << h_center_mass[t]/(double) SAMPLES << endl;
+			fstr << t*T_DATA << "  " << h_center_mass[t]/(double) SAMPLES << endl;
 		}
 		fstr << endl;
 
 	};
 
+	void PrintDisorder(ofstream &fstr){
+		for(int i=0;i<LL;i++)
+		{
+			for(int j=0;j<MM;j++)
+			{
+				int k=i*MM+j;
+				fstr << h_disorder[k] << endl; //<< " " ;
+			}
+			//fstr << endl;
+		}
+		fstr << endl;
+	}
 
 	//////////// Calculate/Accumulate functions ////////////
 
@@ -422,6 +456,11 @@ class elastic_system
 		h_center_mass[index] += cm;
 	};
 
+	double CalculateCenterOfMass(){
+		thrust::device_ptr<float> dev_ptr(d_u);
+		double cm = thrust::reduce(dev_ptr, dev_ptr + LL) / (double) LL;
+		return cm;
+	};
 
 	///////// Setup and Update Functions ///////////
 
@@ -511,13 +550,13 @@ class elastic_system
 	};
 */
 	
-	void InterpolateDisorderPotential(){
+	void InterpolateDisorderSpline(){
 		dim3 dimBlock(TILE);
 		dim3 dimGrid(LL/TILE);
 		assert(LL%TILE==0);
 		assert(dimBlock.x<=THREADS_PER_BLOCK);
 		assert(dimGrid.x<=BLOCKS_PER_GRID);
-		CudaKernel_InterpolateDisorderPotential<<<dimGrid, dimBlock>>>(d_u, d_disorder, d_spline, d_splint, LL, MM);
+		CudaKernel_InterpolateDisorderSpline<<<dimGrid, dimBlock>>>(d_u, d_disorder, d_spline, d_splint, LL, MM);
 	};
 	
 	void RecalculateForce(float uniform_field, unsigned int t){
