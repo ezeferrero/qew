@@ -2,9 +2,10 @@
 BIN = main-EW
 
 # Pathts & Includes
+#UDA_INSTALL_PATH       = /usr/local/cuda
 CUDA_INSTALL_PATH       ?= /usr
-CUDASDK_INSTALL_PATH    = /home/ferrero/NVIDIA_GPU_Computing_SDK
-CUDA_LIB_PATH           = $(CUDA_INSTALL_PATH)/lib
+CUDASDK_INSTALL_PATH    = /opt/cudasdk
+CUDA_LIB_PATH           = $(CUDA_INSTALL_PATH)/lib64
 CUDASDK_LIB_PATH        = $(CUDASDK_INSTALL_PATH)/C/lib64
 INCLUDES += -I. -I$(CUDA_INSTALL_PATH)/include -I$(CUDASDK_INSTALL_PATH)/C/common/inc -I$(CUDASDK_INSTALL_PATH)/shared/inc 
 # -I/home/ferrero/cuda_libraries/
@@ -17,30 +18,33 @@ LDFLAGS                 = -lrt -lm -lcudart -lcufft
 NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
 
 # Default Values
-SAMPLES			= 1
-L			= 16384
-M			= 32768
-T_RUN			= 1000000
-T_DATA			= 100000
-SPACING			= LOGARITHMIC	#LINEAR
+SAMPLES			= 1000
+L			= 8192
+M			= 8192
+#T_RUN=2^T_RUN_EXP
+T_RUN_EXP		= 17
+T_RUN			= 131072
+T_DATA			= 8192
+SPACING			= LOGARITHMIC
+#SPACING			= LINEAR
 TEMP			= 0.f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 2.5f
+H_START			= 1.915f
 DT			= 0.1f
-CUDA_DEVICE		= 1
+CUDA_DEVICE		= 55
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
 # Simulation Parameters
-PARAMETERS              = -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) -DTEMP=$(TEMP) \
-			-DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
-			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING)\
+PARAMETERS		= -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN_EXP=$(T_RUN_EXP) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) \
+			-DTEMP=$(TEMP) -DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
+			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING) \
 			-DCUDA_DEVICE=$(CUDA_DEVICE)
 
 # Compilers
 NVCC                    = $(CUDA_INSTALL_PATH)/bin/nvcc
-GCC                     = g++-4.6
-LINKER                  = g++-4.6
+GCC                     = g++
+LINKER                  = g++
 
 # Files
 C_SOURCES               =
@@ -60,7 +64,7 @@ $(CU_OBJS): $(CU_SOURCES) $(HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -c $(CU_SOURCES) $(PARAMETERS) $(INCLUDES)
 
 run: $(BIN)
-	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) > $(OFILE) & 
+	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) ./$(BIN) > $(OFILE) &
 #	LD_LIBRARY_PATH=$(CUDA_LIB_PATH) valgrind --tool=memcheck --leak-check=full --track-origins=yes ./$(BIN)  
 
 clean:
