@@ -32,7 +32,7 @@ C_BETA			= 1.f
 C_EPSILON		= 1.f
 H_START			= 1.915f
 DT			= 0.1f
-CUDA_DEVICE		= 55
+CUDA_DEVICE		= 0
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
 # Simulation Parameters
