@@ -8,15 +8,15 @@
 #ifndef EW_LIBRARY_CUH_
 #define EW_LIBRARY_CUH_
 
-//#include "../common/common.c"
-//#include <stdint.h> /* uint8_t */
-//#include "../common/nrutil.h"
+#include "../common/mean_and_variance.cuh"
 
 #include <thrust/device_ptr.h> 
 #include <thrust/reduce.h>
 //#include <thrust/host_vector.h>
 //#include <thrust/device_vector.h>
 //#include <thrust/transform_reduce.h>
+
+
 
 using namespace thrust;
 using namespace std;
@@ -47,12 +47,12 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 	unsigned long long rng_state = d_x[tid];
 	unsigned int rng_const = d_a[tid];
 	
-	unsigned int i;	
+	unsigned int i;
 	for (unsigned int iFrame=0; iFrame<(nx/FRAME2D); iFrame++) {
 		i = iAux + FRAME2D*iFrame;
 		unsigned int j;
 		for (unsigned int jFrame=0; jFrame<(ny/FRAME2D); jFrame++) {
-			j = jAux + FRAME2D*jFrame;	
+			j = jAux + FRAME2D*jFrame;
 			// compute index with i and j, the location of the element in the original LL*MM array 
 			int index = i*ny + j;
 			d_disorder[index] = C_EPSILON*(rand_MWC_normal(&rng_state, &rng_const));
@@ -60,7 +60,7 @@ __global__ void CudaKernel_SetDisorder(float *d_disorder, int nx, int ny){
 			d_disorder[index] = (d_disorder[index] < 0.99e30 && d_disorder[index] > -0.99e30)*d_disorder[index]; 
 		}
 	}	
-	d_x[tid] = rng_state; // store RNG state into global again		
+	d_x[tid] = rng_state; // store RNG state into global again
 }
 
 
@@ -133,15 +133,21 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 		//const float elastic_force = C_BETA*(a[(index-1+nx)%nx] -2*a[index] + a[(index+1)%nx]);
 		//const float elastic_force = C_BETA*(a[(index==0)*(nx-1)+(index!=0)*(index-1)] -2*a[index] + a[(index==(nx-1))*0+(index!=(nx-1))*(index+1)]); //better
 		//const float elastic_force = C_BETA*(a[((index==0)?(nx-1):(index-1))] -2*a[index] + a[((index==(nx-1))?(0):(index+1))]); 
-		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]); //even better
 
+		#ifdef ANHARMONIC
+		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]) + \
+		C_OMEGA*((a[index_p1]-a[index])*(a[index_p1]-a[index])*(a[index_p1]-a[index])+(a[index_m1]-a[index])*(a[index_m1]-a[index])*(a[index_m1]-a[index]));
+		#else
+		const float elastic_force = C_BETA*(a[index_m1] -2*a[index] + a[index_p1]); //even better
+		#endif
+		
 		const float pinning_force = C_EPSILON*d[index];
 
 		const float thermal_force = xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
 
 		b[index] =  elastic_force + pinning_force + thermal_force + uniform_field;
 	}
-	d_x[tid] = rng_state; // store RNG state into global again		
+	d_x[tid] = rng_state; // store RNG state into global again
 }
 
 /* // using Shared Memory // does not improve performance as it is now 
@@ -199,7 +205,7 @@ __global__ void CudaKernel_R2RScaled(cufftReal *a, int nx, int ny, float scale){
 	// compute idx and idy, the location of the element in the original LL*MM array 
 	int idx = blockIdx.x*blockDim.x+threadIdx.x;
 	int idy = blockIdx.y*blockDim.y+threadIdx.y;
-	if ( idx < nx && idy < ny){	
+	if ( idx < nx && idy < ny){
 		int index = idx*ny + idy;
 		a[index]= scale*a[index];
 	}	
@@ -209,7 +215,7 @@ __global__ void CudaKernel_C2CScaled(cufftComplex *a, unsigned int nx, unsigned 
 	// compute idx and idy, the location of the element in the original LL*MM array 
 	unsigned int idx = blockIdx.x*blockDim.x+threadIdx.x;
 	unsigned int idy = blockIdx.y*blockDim.y+threadIdx.y;
-	if ( idx < nx && idy < ny){	
+	if ( idx < nx && idy < ny){
 		unsigned int index = idx*ny + idy;
 		a[index].x= scale*a[index].x;
 		a[index].y= scale*a[index].y;
@@ -237,7 +243,7 @@ __global__ void CudaKernel_AccumulateStructureFactor(const float *a, double *b, 
 	int idx = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if (idx < nx){
-		b[i*nx + idx] += a[idx] ;
+		b[i*nx + idx] += a[idx]/(float) nx ;
 	}
 }
 
@@ -268,38 +274,47 @@ class elastic_system
 	float *d_force;
 	
 	//Arrays for the physical quantities
+	unsigned int *tabulatedtime;
 	//float array to hold the Structure Factor 
 	float *d_structure_factor, *h_structure_factor;
 	//double array to accumulate the Structure Factor 
-	double *d_structure_factor_acum, *h_structure_factor_acum;
+	double *d_structure_factor_accum, *h_structure_factor_accum;
 	//double array to accumulate the Center of Mass Position 
-	double *h_center_mass; //*d_center_mass; 
+	double *h_center_mass_accum, *h_width_accum; 
+	double *h_velocity_accum, *h_velocityvariance_accum;
+
+	typedef float TT;
+	summary_stats_data<TT> result;
+
 
 	// intializing the class
 	elastic_system(){
-      
+
 		//allocating memory for the system array in host and device (vector)
 		h_u = (float *)malloc(sizeof(float)*LL);
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_u, sizeof(float)*LL));
-		CUDA_SAFE_CALL(cudaMalloc((void**)&d_u_complex, sizeof(cufftComplex)*(LL/2+1)*BATCH));		
+		CUDA_SAFE_CALL(cudaMalloc((void**)&d_u_complex, sizeof(cufftComplex)*(LL/2+1)*BATCH));
 		//allocating memory for the disorder matrix in host and device 
 		h_disorder = (float *)malloc(sizeof(float)*LL*MM);
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_disorder, sizeof(float)*LL*MM));
 		//allocating memory for the disorder spline (matrix)
-		h_spline = (float *)malloc(sizeof(float)*LL*MM);		
+		h_spline = (float *)malloc(sizeof(float)*LL*MM);
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_spline, sizeof(float)*LL*MM));
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_splint, sizeof(float)*LL));
 		//allocating memory for the force (vector)
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_force, sizeof(float)*LL));
 		//allocating memory for the Structure Factor
 		CUDA_SAFE_CALL(cudaMalloc((void**)&d_structure_factor, sizeof(float)*(LL/2+1)));
-		CUDA_SAFE_CALL(cudaMalloc((void**)&d_structure_factor_acum, sizeof(double)*(T_RUN/T_DATA+1)*(LL/2+1)));
+		CUDA_SAFE_CALL(cudaMalloc((void**)&d_structure_factor_accum, sizeof(double)*(NPOINTS*(LL/2+1))));
 		h_structure_factor = (float *)malloc(sizeof(float)*(LL/2+1));
-		h_structure_factor_acum = (double *)malloc(sizeof(double)*(T_RUN/T_DATA+1)*(LL/2+1));
+		h_structure_factor_accum = (double *)malloc(sizeof(double)*NPOINTS*(LL/2+1));
 		//allocating memory for the Center of Mass
-		//CUDA_SAFE_CALL(cudaMalloc((void**)&d_center_mass, sizeof(double)*(T_RUN/T_DATA+1)));
-		h_center_mass = (double *)malloc(sizeof(double)*(T_RUN/T_DATA+1));		
-
+		//CUDA_SAFE_CALL(cudaMalloc((void**)&d_center_mass_accum, sizedata_cm));
+		h_center_mass_accum = (double *)malloc(sizeof(double)*NPOINTS);
+		h_width_accum = (double *)malloc(sizeof(double)*NPOINTS);
+		h_velocity_accum = (double *)malloc(sizeof(double)*NPOINTS);
+		h_velocityvariance_accum = (double *)malloc(sizeof(double)*NPOINTS);
+		tabulatedtime = (unsigned int *)malloc(NPOINTS*sizeof(unsigned int));
 
 		/* Fill everything with 0s */
 		CUDA_SAFE_CALL(cudaMemset(d_u, 0, LL*sizeof(float)));
@@ -317,7 +332,7 @@ class elastic_system
 		CUDA_SAFE_CALL(cudaMemset(d_force, 0, LL*sizeof(float)));
 
 		CUDA_SAFE_CALL(cudaMemset(d_structure_factor, 0, (LL/2+1)*sizeof(float)));
-		CUDA_SAFE_CALL(cudaMemset(d_structure_factor_acum, 0, (T_RUN/T_DATA+1)*(LL/2+1)*sizeof(double)));
+		CUDA_SAFE_CALL(cudaMemset(d_structure_factor_accum, 0, sizeof(double)*NPOINTS*(LL/2+1)));
 
 		//CUDA_SAFE_CALL(cudaMemset(d_center_mass, 0, (T_RUN/T_DATA+1)*sizeof(double)));
 	
@@ -331,11 +346,14 @@ class elastic_system
 		for (unsigned int k=0; k<(LL/2+1); k++){
 			h_structure_factor[k] = 0.;
 		}
-		for (unsigned int k=0; k<(T_RUN/T_DATA+1)*(LL/2+1); k++){
-			h_structure_factor_acum[k] = 0.;
+		for (unsigned int k=0; k<NPOINTS*(LL/2+1); k++){
+			h_structure_factor_accum[k] = 0.;
 		}	
-		for (unsigned int k=0; k<(T_RUN/T_DATA+1); k++){
-			h_center_mass[k] = 0.;
+		for (unsigned int k=0; k<NPOINTS; k++){
+			h_width_accum[k] = 0.;
+			h_center_mass_accum[k] = 0.;
+			h_velocity_accum[k] = 0.;
+			h_velocityvariance_accum[k] = 0.;
 		}
 
 		// plan R2C
@@ -365,12 +383,13 @@ class elastic_system
 		fstr << endl;
 	};
 
-	void PrintStructureFactorAcum(ofstream &fstr){
-		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor_acum, d_structure_factor_acum, sizeof(double)*(T_RUN/T_DATA+1)*(LL/2+1), cudaMemcpyDeviceToHost));
-		for(int t=0; t<(T_RUN/T_DATA+1); t++){
+	void PrintStructureFactorAccum(ofstream &fstr){
+		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor_accum, d_structure_factor_accum, sizeof(double)*NPOINTS*(LL/2+1), cudaMemcpyDeviceToHost));
+		for(int index=0; index<NPOINTS; index++){
+			fstr << "#Structure Factor for time " << tabulatedtime[index] << endl;
 			for(unsigned int i=1;i<(LL/2+1);i++)
 			{
-			fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor_acum[t*(LL/2+1) + i]/(double) SAMPLES << endl;
+			fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor_accum[index*(LL/2+1) + i]/(double) SAMPLES << endl;
 			}
 			fstr << endl;
 		}
@@ -378,13 +397,22 @@ class elastic_system
 
 	};
 
-	void PrintCenterOfMassAcum(ofstream &fstr){
-		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
-		for(int t=0; t<(T_RUN/T_DATA+1); t++){
-			fstr << t*T_DATA << "  " << h_center_mass[t]/(double) SAMPLES << endl;
+	void PrintCenterOfMassAccum(ofstream &fstr){
+		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass_accum, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
+		for(int index=0; index<NPOINTS; index++){
+			fstr << tabulatedtime[index] << "  " << h_center_mass_accum[index]/(double) SAMPLES \
+			<< "  " << h_width_accum[index]/(double) SAMPLES << endl;
 		}
 		fstr << endl;
+	};
 
+	void PrintVelocityAccum(ofstream &fstr){
+		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass_accum, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
+		for(int index=0; index<NPOINTS; index++){
+			double sigma = sqrt(h_velocity_accum[index]*h_velocity_accum[index] - h_velocityvariance_accum[index]) /(double) (SAMPLES*SAMPLES);
+			fstr << tabulatedtime[index] << "  " << h_velocity_accum[index]/(double) SAMPLES << "  " << sigma << endl;
+		}
+		fstr << endl;
 	};
 
 	void PrintDisorder(ofstream &fstr){
@@ -423,37 +451,52 @@ class elastic_system
 		CudaKernel_CalculateStructureFactor<<<dimGrid, dimBlock>>>(d_u_complex, d_structure_factor, LL/2+1);
 	};
 
-
-	void AccumulateStructureFactor(unsigned int time){
+/*	
+	// apply scaling ( an FFT followed by iFFT will give you back the same array times the length of the transform)
+	void Normalize(void){
 		dim3 dimBlock(TILE);
 		dim3 dimGrid(LL/TILE);
 		assert(LL%TILE==0);
-		assert(time%T_DATA==0);
 		assert(dimBlock.x<=THREADS_PER_BLOCK);
 		assert(dimGrid.x<=BLOCKS_PER_GRID);
-
-		CudaKernel_AccumulateStructureFactor<<<dimGrid, dimBlock>>>(d_structure_factor, d_structure_factor_acum, LL/2+1, time/T_DATA);
-	};	  
-
-	
-/*	
-	// apply scaling ( an FFT followed by iFFT will give you back the same array times the length of the transform)
-	void normalize(void){
-		dim3 dimBlock(TILE_X, TILE_Y);
-		dim3 dimGrid(LL/TILE_X, MM/TILE_Y);
-		assert(dimBlock.x*dimBlock.y<=THREADS_PER_BLOCK);
-		assert(dimGrid.x<=BLOCKS_PER_GRID && dimGrid.y<=BLOCKS_PER_GRID);
-		//CudaKernel_C2CScaled<<<dimGrid, dimBlock>>>(d_phi, LL, MM, 1.f / ((float) LL * (float) MM));
-		CudaKernel_R2RScaled<<<dimGrid, dimBlock>>>(d_phi_r, LL, MM, 1.f / ((float) LL * (float) MM));
+		CudaKernel_C2CScaled<<<dimGrid, dimBlock>>>(d_u_complex, LL, 1.f / (float) LL));
 	}
 */
 
-	void CalculateAccumulateCenterOfMass(unsigned int time){
-		assert(time%T_DATA==0);
-		int index = time/T_DATA;
-		thrust::device_ptr<float> dev_ptr(d_u);
-		double cm = thrust::reduce(dev_ptr, dev_ptr + LL) / (double) LL;
-		h_center_mass[index] += cm;
+
+	void TabulateTime(unsigned int index, unsigned int time){
+		tabulatedtime[index]=time;
+	}
+
+
+	void AccumulateStructureFactor(unsigned int index, unsigned int time){
+		assert(tabulatedtime[index]==time);
+		dim3 dimBlock(TILE);
+		dim3 dimGrid(LL/TILE);
+		assert(LL%TILE==0);
+		assert(dimBlock.x<=THREADS_PER_BLOCK);
+		assert(dimGrid.x<=BLOCKS_PER_GRID);
+
+		CudaKernel_AccumulateStructureFactor<<<dimGrid, dimBlock>>>(d_structure_factor, d_structure_factor_accum, LL/2+1, index);
+	};
+
+	void CalculateAccumulateCenterOfMass(unsigned int index, unsigned int time){
+		assert(tabulatedtime[index]==time);
+		//thrust::device_ptr<float> dev_ptr(d_u);
+		//double cm = thrust::reduce(dev_ptr, dev_ptr + LL) / (double) LL;
+		//h_center_mass_accum[index] += cm;
+
+		MeanVariance(d_u, LL, result);
+		h_center_mass_accum[index] += result.mean;
+		h_width_accum[index] += result.variance();
+	};
+
+	void CalculateAccumulateVelocity(unsigned int index, unsigned int time){
+		assert(tabulatedtime[index]==time);
+		thrust::device_ptr<float> dev_ptr(d_force);
+		double velocity = thrust::reduce(dev_ptr, dev_ptr + LL) / (double) LL;
+		h_velocity_accum[index] += velocity;
+		h_velocityvariance_accum[index] += velocity*velocity;
 	};
 
 	double CalculateCenterOfMass(){
@@ -532,8 +575,8 @@ class elastic_system
 	  
 		CUDA_SAFE_CALL(cudaMemcpy(d_spline,h_spline,sizeof(float)*LL*MM, cudaMemcpyHostToDevice));
 		free(x);
-		free(y);	
-		free(y2);		
+		free(y);
+		free(y2);
 
 		//TODO: Move d_spline to texture memory	    
 		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));
@@ -704,10 +747,10 @@ class elastic_system
 		cufftDestroy(Sr2c);
 		cudaFree(d_u); cudaFree(d_u_complex); 
 		cudaFree(d_disorder); cudaFree(d_spline); cudaFree(d_splint); cudaFree(d_force);
-		cudaFree(d_structure_factor); cudaFree(d_structure_factor_acum);
+		cudaFree(d_structure_factor); cudaFree(d_structure_factor_accum);
 		free(h_u); 
 		free(h_disorder); free(h_spline); 
-		free(h_structure_factor); free(h_structure_factor_acum); free(h_center_mass);
+		free(h_structure_factor); free(h_structure_factor_accum); free(h_center_mass_accum);
 	};
 
 };
