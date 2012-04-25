@@ -9,7 +9,7 @@
 #define EW_LIBRARY_CUH_
 
 #include "../common/mean_and_variance.cuh"
-#include "histogramas_nuevo/histo.h"
+#include "../common/histo.h"
 
 #include <thrust/device_ptr.h> 
 #include <thrust/reduce.h>
