@@ -2,7 +2,7 @@
 BIN = main-EW
 
 # Pathts & Includes
-#UDA_INSTALL_PATH       = /usr/local/cuda
+#CUDA_INSTALL_PATH       = /usr/local/cuda
 CUDA_INSTALL_PATH       ?= /usr
 CUDASDK_INSTALL_PATH    = /opt/cudasdk
 CUDA_LIB_PATH           = $(CUDA_INSTALL_PATH)/lib64
@@ -19,19 +19,19 @@ NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ft
 
 # Default Values
 SAMPLES			= 1000
-L			= 8192
-M			= 8192
+L			= 512
+M			= 512
 #T_RUN=2^T_RUN_EXP
-T_RUN_EXP		= 17
-T_RUN			= 131072
-T_DATA			= 8192
+T_RUN_EXP		= 16
+T_RUN			= 65536
+T_DATA			= 1024
 SPACING			= LOGARITHMIC
 #SPACING			= LINEAR
 TEMP			= 0.f
 C_BETA			= 1.f
 C_EPSILON		= 1.f
-H_START			= 1.915f
-DT			= 0.1f
+H_START			= 1.294f
+DT			= 0.025f
 CUDA_DEVICE		= 0
 OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
@@ -39,7 +39,7 @@ OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(
 PARAMETERS		= -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN_EXP=$(T_RUN_EXP) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) \
 			-DTEMP=$(TEMP) -DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
 			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING) \
-			-DCUDA_DEVICE=$(CUDA_DEVICE)
+			-DCUDA_DEVICE=$(CUDA_DEVICE) -DZEROTEMP -DANHARMONIC
 
 # Compilers
 NVCC                    = $(CUDA_INSTALL_PATH)/bin/nvcc

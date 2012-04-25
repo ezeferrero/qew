@@ -9,14 +9,14 @@
 #define EW_LIBRARY_CUH_
 
 #include "../common/mean_and_variance.cuh"
+#include "histogramas_nuevo/histo.h"
 
 #include <thrust/device_ptr.h> 
 #include <thrust/reduce.h>
+#include <thrust/copy.h>
 //#include <thrust/host_vector.h>
 //#include <thrust/device_vector.h>
 //#include <thrust/transform_reduce.h>
-
-
 
 using namespace thrust;
 using namespace std;
@@ -97,6 +97,7 @@ __global__ void CudaKernel_InterpolateDisorderPotential(const float *u, const fl
 }
 */
 
+
 __global__ void CudaKernel_InterpolateDisorderSpline(const float *u, const float *disorder, const float *second_deriv, float *y, int nx, int ny){
 	int tid = blockIdx.x*blockDim.x+threadIdx.x;
 	if ( tid < nx ){
@@ -112,6 +113,7 @@ __global__ void CudaKernel_InterpolateDisorderSpline(const float *u, const float
 		const float B = 1-A; 		// B = 1-A;
 	
 		y[tid] = -(disorder[index_p1] - disorder[index] - ((3*A*A-1)/6.)* second_deriv[index] + ((3*B*B-1)/6.)* second_deriv[index_p1]) ;
+		//y[tid] = (disorder[index_p1] - disorder[index])*B + disorder[index]; //lineal!!!
 
 	}
 }
@@ -119,9 +121,11 @@ __global__ void CudaKernel_InterpolateDisorderSpline(const float *u, const float
 
 __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
 	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
-	// move thread RNG state to registers. 
+	// move thread RNG state to registers.
+	#ifndef ZEROTEMP
 	unsigned long long rng_state = d_x[tid];
 	const unsigned int rng_const = d_a[tid];
+	#endif
 
 	unsigned int index;
 	for (unsigned int iFrame=0; iFrame<(nx/FRAME1D); iFrame++) {
@@ -143,14 +147,22 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 		
 		const float pinning_force = C_EPSILON*d[index];
 
-		const float thermal_force = xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
-
+		#ifndef ZEROTEMP
+		const float thermal_force = XTEMP*(rand_MWC_co(&rng_state, &rng_const)-0.5);
 		b[index] =  elastic_force + pinning_force + thermal_force + uniform_field;
+		#else
+		b[index] =  elastic_force + pinning_force + uniform_field;
+		#endif
+
 	}
+	#ifndef ZEROTEMP
 	d_x[tid] = rng_state; // store RNG state into global again
+	#endif
 }
 
-/* // using Shared Memory // does not improve performance as it is now 
+
+/*
+// using Shared Memory // does not improve performance as it is now 
 __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const float *d, const float uniform_field, int nx){
 	const unsigned int tid = blockIdx.x*blockDim.x+threadIdx.x;
 	const unsigned int tidx = threadIdx.x;
@@ -162,33 +174,38 @@ __global__ void CudaKernel_RecalculateForce(const float *a, float *b, const floa
 	for (unsigned int iFrame=0; iFrame<(nx/FRAME1D); iFrame++) {
 		index = tid + FRAME1D*iFrame;
 
-		unsigned int index_m1 = (index==0)*(nx-1)+(index!=0)*(index-1);
-		unsigned int index_p1 = (index!=(nx-1))*(index+1);
+		__shared__ float as[TILE+2]; 
+		__shared__ float ds[TILE+2]; 
+		__shared__ float bs[TILE+2];
+		as[tidx+1] = a[index]; 
+		ds[tidx+1] = d[index]; 
+		if(tidx==0){ 
+			unsigned int index_m1 = (index==0)*(nx-1)+(index!=0)*(index-1);
+			as[tidx] = a[index_m1]; 
+		}
+		if(tidx==TILE-1){
+			unsigned int index_p1 = (index!=(nx-1))*(index+1);
+			as[tidx+2] = a[index_p1];
+		}
 
-		__shared__ float as[TILE]; 
-		__shared__ float ds[TILE]; 
-		__shared__ float bs[TILE];
-		as[tidx] = a[index]; 
-		ds[tidx] = d[index]; 
+		__syncthreads();
 
-		__syncthreads();		
-
-		const float right = ((tidx<(blockDim.x-1)) ? as[tidx+1]:a[index_p1]); 
- 		const float left = ((tidx > 0) ? as[tidx-1]:a[index_m1]); 
+		const float right = as[tidx+2];
+ 		const float left = as[tidx]; 
 		
-		const float elastic_force = C_BETA*(left -2*as[tidx] + right); 
+		const float elastic_force = C_BETA*(left -2*as[tidx+1] + right); 
 
-		const float pinning_force = C_EPSILON*ds[tidx]; 
+		const float pinning_force = C_EPSILON*ds[tidx+1]; 
 
-		const float thermal_force = xtemp*(rand_MWC_co(&rng_state, &rng_const)-0.5);
+		const float thermal_force = XTEMP*(rand_MWC_co(&rng_state, &rng_const)-0.5);
 
-		bs[tidx] =  elastic_force + pinning_force + thermal_force + uniform_field; 
+		bs[tidx+1] = elastic_force + pinning_force + thermal_force + uniform_field; 
 
 		__syncthreads(); 
 
-		b[index] = bs[tidx];
+		b[index] = bs[tidx+1];
 	}
-	d_x[tid] = rng_state; // store RNG state into global again		
+	d_x[tid] = rng_state; // store RNG state into global again
 }
 */
 
@@ -286,6 +303,7 @@ class elastic_system
 	typedef float TT;
 	summary_stats_data<TT> result;
 
+	thrust::device_vector<float> histogram_accum;
 
 	// intializing the class
 	elastic_system(){
@@ -316,6 +334,8 @@ class elastic_system
 		h_velocityvariance_accum = (double *)malloc(sizeof(double)*NPOINTS);
 		tabulatedtime = (unsigned int *)malloc(NPOINTS*sizeof(unsigned int));
 
+		histogram_accum.resize(NBINS*(T_RUN_EXP+1));
+
 		/* Fill everything with 0s */
 		CUDA_SAFE_CALL(cudaMemset(d_u, 0, LL*sizeof(float)));
 		CUDA_SAFE_CALL(cudaMemset(d_u_complex, 0, (LL/2+1)*sizeof(cufftComplex)));
@@ -333,6 +353,8 @@ class elastic_system
 
 		CUDA_SAFE_CALL(cudaMemset(d_structure_factor, 0, (LL/2+1)*sizeof(float)));
 		CUDA_SAFE_CALL(cudaMemset(d_structure_factor_accum, 0, sizeof(double)*NPOINTS*(LL/2+1)));
+
+		thrust::fill(histogram_accum.begin(),histogram_accum.end(),0);
 
 		//CUDA_SAFE_CALL(cudaMemset(d_center_mass, 0, (T_RUN/T_DATA+1)*sizeof(double)));
 	
@@ -383,34 +405,52 @@ class elastic_system
 		fstr << endl;
 	};
 
-	void PrintStructureFactorAccum(ofstream &fstr){
+	void PrintStructureFactorAccum(ofstream &fstr, int s){
 		CUDA_SAFE_CALL(cudaMemcpy(h_structure_factor_accum, d_structure_factor_accum, sizeof(double)*NPOINTS*(LL/2+1), cudaMemcpyDeviceToHost));
+		fstr << "#Structure Factor for" << s << "samples " << endl;
 		for(int index=0; index<NPOINTS; index++){
 			fstr << "#Structure Factor for time " << tabulatedtime[index] << endl;
 			for(unsigned int i=1;i<(LL/2+1);i++)
 			{
-			fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor_accum[index*(LL/2+1) + i]/(double) SAMPLES << endl;
+			fstr << 2*sin(M_PI*i/(double) LL) << "  " << h_structure_factor_accum[index*(LL/2+1) + i]/(double) s << endl;
 			}
-			fstr << endl;
+			fstr << endl  << endl;
 		}
 		fstr << endl;
 
 	};
 
-	void PrintCenterOfMassAccum(ofstream &fstr){
-		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass_accum, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
-		for(int index=0; index<NPOINTS; index++){
-			fstr << tabulatedtime[index] << "  " << h_center_mass_accum[index]/(double) SAMPLES \
-			<< "  " << h_width_accum[index]/(double) SAMPLES << endl;
+	void PrintVelocityHistogramAccum(ofstream &fstr, int s, float leftlimit, float rightlimit){
+		//thrust::host_vector<int> H = histogram_accum;
+		float increment= (rightlimit-leftlimit)/NBINS;
+
+		fstr << "#Velocity histogram for" << s << "samples " << endl;
+		for(int index=0; index<(T_RUN_EXP+1); index++){
+			fstr << "#Velocity histogram for two to the" << index << endl;
+			for(int i=0;i<NBINS;i++)
+			{
+			fstr << leftlimit+(i)*increment << " " << histogram_accum[index*NBINS+i] / float(s) << endl;
+			}
+			fstr << endl << endl;
 		}
 		fstr << endl;
 	};
 
-	void PrintVelocityAccum(ofstream &fstr){
-		//CUDA_SAFE_CALL(cudaMemcpy(h_center_mass_accum, d_center_mass, sizeof(double)*(T_RUN/T_DATA+1), cudaMemcpyDeviceToHost));
+
+	void PrintCenterOfMassAccum(ofstream &fstr, int s){
+		fstr << "#Center of Mass possition for" << s << "samples " << endl;
 		for(int index=0; index<NPOINTS; index++){
-			double sigma = sqrt(h_velocity_accum[index]*h_velocity_accum[index] - h_velocityvariance_accum[index]) /(double) (SAMPLES*SAMPLES);
-			fstr << tabulatedtime[index] << "  " << h_velocity_accum[index]/(double) SAMPLES << "  " << sigma << endl;
+			fstr << tabulatedtime[index] << "  " << h_center_mass_accum[index]/(double) s \
+			<< "  " << h_width_accum[index]/(double) s << endl;
+		}
+		fstr << endl;
+	};
+
+	void PrintVelocityAccum(ofstream &fstr,  int s){
+		fstr << "#Center of Mass velocity for" << s << "samples " << endl;
+		for(int index=0; index<NPOINTS; index++){
+			double sigma = sqrt(h_velocity_accum[index]*h_velocity_accum[index] /(double) (s*s) - h_velocityvariance_accum[index] /(double) (s*s));
+			fstr << tabulatedtime[index] << "  " << h_velocity_accum[index]/(double) s << "  " << sigma << endl;
 		}
 		fstr << endl;
 	};
@@ -494,10 +534,25 @@ class elastic_system
 	void CalculateAccumulateVelocity(unsigned int index, unsigned int time){
 		assert(tabulatedtime[index]==time);
 		thrust::device_ptr<float> dev_ptr(d_force);
+
 		double velocity = thrust::reduce(dev_ptr, dev_ptr + LL) / (double) LL;
 		h_velocity_accum[index] += velocity;
 		h_velocityvariance_accum[index] += velocity*velocity;
-	};
+
+		};
+
+	void CalculateAccumulateVelocityHistogram(unsigned int index, unsigned int time, float leftlimit, float rightlimit, int numberofbins){
+		thrust::device_ptr<float> dev_ptr(d_force);
+		thrust::device_vector<float> input;
+		input.resize(LL);
+		thrust::copy(dev_ptr, dev_ptr + LL, input.begin());
+
+		thrust::device_vector<float> histogram(numberofbins);
+		dense_histogram_data_on_device(input, histogram, leftlimit, rightlimit);
+
+		thrust::transform(histogram.begin(), histogram.end(),\
+				 histogram_accum.begin()+index*numberofbins, histogram_accum.begin()+index*numberofbins, thrust::plus<float>());
+	}
 
 	double CalculateCenterOfMass(){
 		thrust::device_ptr<float> dev_ptr(d_u);

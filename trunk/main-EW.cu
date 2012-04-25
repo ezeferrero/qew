@@ -65,8 +65,8 @@
 #ifndef TEMP
 #define TEMP 0.1f	/* Heat Bath temperature*/
 #endif
-#define	xtemp sqrt(24.*TEMP/DT) 
-//#define xtemp sqrt(24.*TEMP*DT)
+#define	XTEMP sqrt(24.*TEMP/DT) 
+//#define XTEMP sqrt(24.*TEMP*DT)
 
 #ifndef H_START
 #define H_START 0.0f	/* Uniform external field */
@@ -96,6 +96,10 @@
 #define NPOINTS ((T_RUN_EXP*5)-8)
 #endif
 
+#define NBINS 200
+#define LEFTLIMIT -0.5
+#define RIGHTLIMIT 1.0
+
 // Some Functions (just in case)
 #define MAX(a,b) (((a)<(b))?(b):(a))	/* maximum */
 #define MIN(a,b) (((a)<(b))?(a):(b))	/* minimum */ 
@@ -116,6 +120,7 @@
 
 // RNG: Multiply With Carry
 #include "../common/CUDAMCMLrng.cu"
+#include "../common/timers_cpu.hpp"
 
 // Parameters to frame the system according to the maximum number of independent MWC RNGs
 #define FRAME1D MIN(LL,131072)	// the whole thing should be framed for the RNG if LL>2^17
@@ -127,8 +132,8 @@
 #define NUM_THREADS_1D (FRAME1D)
 #define NUM_THREADS MAX(NUM_THREADS_1D, NUM_THREADS_2D) 
 #define MICROSEC (1E-6)
-#define SEED time(NULL)
-//#define SEED 1332277027
+//#define SEED time(NULL)
+#define SEED 1332277027
 
 // Safe-Primes file used by the MWC RNG
 #define SAFE_PRIMES_FILENAME "../common/safeprimes_base32.txt"
@@ -173,6 +178,9 @@ void RunSample(int s, elastic_system &T){
 
 	h_field = H_START; 
 
+	//cpu_timer reloj;
+	//reloj.tic();
+
 	/* Choose a particular initial condition for the line (made on the host)*/
 	T.InitParticular(LL, 0, 0.); // InitParticular(L, shape, offset) shape: 0:flat; 1:sinusoidal, ..... more to come
 
@@ -186,7 +194,13 @@ void RunSample(int s, elastic_system &T){
 	//ofstream disorderfile("disorder.dat");
 	//T.PrintDisorder(disorderfile);
 
+	//reloj.tac();
+	//reloj.print();
+
+	//reloj.tic();
+
 	unsigned int index=0;
+	unsigned int index1=0;
 	// Time loop, from 0 to T_RUN (included)
 	for(unsigned int time=0;time<T_RUN+1; time++){
 
@@ -227,7 +241,14 @@ void RunSample(int s, elastic_system &T){
 			T.InterpolateDisorderSpline();
 			T.RecalculateForce(h_field, time);
 			T.CalculateAccumulateVelocity(index, time);
-
+/*
+			#ifdef LOGARITHMIC
+			if( time==aux ){
+			T.CalculateAccumulateVelocityHistogram(index1, time, LEFTLIMIT, RIGHTLIMIT, NBINS);
+			index1++;
+			}
+			#endif
+*/
 			/* Integration step*/
 			T.EulerStep(time);
 
@@ -241,6 +262,7 @@ void RunSample(int s, elastic_system &T){
 			/* Integration step*/
 			T.EulerStep(time);
 		}
+
 		
 		/* Choose external field protocol */
 
@@ -260,15 +282,11 @@ void RunSample(int s, elastic_system &T){
 		/*constant field*/
 		// Do nothing, it stays in H_START
 
-		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));	
+		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));
 	}
-		/* Print Structure Factor in a temporal file after each sample finishes*/
-	/*	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.tmp",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
-		ofstream file2(filename);
-		T.PrintStructureFactorAccum(file2);
-		printf("# unnormalized Structure Factor for %i samples in %s\n", s, filename);
-	*/
 
+	//reloj.tac();
+	//reloj.print();
 }
 
 
@@ -287,7 +305,7 @@ int main(){
 	assert(DT<=0.2);	//We've assumed a small temporal step in the integration scheme
 	
 	// Set the GPGPU computing device
-	//CUDA_SAFE_CALL(cudaSetDevice(CUDA_DEVICE));
+	CUDA_SAFE_CALL(cudaSetDevice(CUDA_DEVICE));
 
 	// Choosing less "shared memory", more cache.
 	CUDA_SAFE_CALL(cudaThreadSetCacheConfig(cudaFuncCachePreferL1)); 
@@ -309,7 +327,11 @@ int main(){
 	printf("# Dt for Euler step: %f\n", DT);
 	printf("# Temperature: %f\n", TEMP);
 	printf("# External field: %f\n", H_START);
+	printf("# GPU used (device ID): %i\n", CUDA_DEVICE);
 	printf("# SEED used: %i\n", SEED);
+	#ifdef ANHARMONIC
+	printf("# ANHARMONIC ON");
+	#endif
 
 	// Initialize the RNGs
 	if (ConfigureRandomNumbers()) {
@@ -317,32 +339,57 @@ int main(){
 	}
 
 	// main{} variables
-	char filename [200];
+	char filename [240];
 
 	// Our class
 	elastic_system T;
 
 	for(unsigned int s=0; s < SAMPLES; s++){
 		RunSample(s,T);
+
+		if ((s+1)%100==0){
+			/* Print partial averages of Structure Factor and Center of Mass position*/
+
+			sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.tmp",\
+			LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+			ofstream file2(filename);
+			T.PrintStructureFactorAccum(file2, s);
+
+			sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.tmp",\
+			LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+			ofstream file3(filename);
+			T.PrintCenterOfMassAccum(file3, s);
+
+			sprintf(filename, "V_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.tmp",\
+			LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+			ofstream file4(filename);
+			T.PrintVelocityAccum(file4, s);
+		}
+
 	}
 
 	/* Print final averages of Structure Factor and Center of Mass position*/
 
 	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file2(filename);
-	T.PrintStructureFactorAccum(file2);
+	T.PrintStructureFactorAccum(file2, SAMPLES);
 	printf("# Structure Factor averaged over %i samples in %s\n", SAMPLES, filename);
 
 	sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file3(filename);
-	T.PrintCenterOfMassAccum(file3);
+	T.PrintCenterOfMassAccum(file3, SAMPLES);
 	printf("# Center of Mass position averaged over %i samples in %s\n", SAMPLES, filename);
 
 	sprintf(filename, "V_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file4(filename);
-	T.PrintVelocityAccum(file4);
+	T.PrintVelocityAccum(file4, SAMPLES);
 	printf("# Center of Mass velocity aveaged over %i samples in %s\n", SAMPLES, filename);
 
+/*	sprintf(filename, "HV_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+	ofstream file5(filename);
+	T.PrintVelocityHistogramAccum(file5, SAMPLES, LEFTLIMIT, RIGHTLIMIT);
+	printf("# Velocity distribution histogram aveaged over %i samples in %s\n", SAMPLES, filename);
+*/
 	// Stop timer
 	gettimeofday(&end,NULL);
 	timeval_subtract(&elapsed, &end, &start);
