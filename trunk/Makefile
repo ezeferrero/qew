@@ -1,5 +1,5 @@
 # Binary file
-BIN = main-EW
+BIN = main-QEW
 
 # Pathts & Includes
 #CUDA_INSTALL_PATH       = /usr/local/cuda
