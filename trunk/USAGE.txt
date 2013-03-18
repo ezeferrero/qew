@@ -1,0 +1,6 @@
+use "make" to compile
+use "make run" to compile and run
+
+Note: Check in Makefile all paths to libraries and installation folders
+Note2: Running parameters and options can be selected in the Makefile
+
