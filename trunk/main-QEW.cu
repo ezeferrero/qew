@@ -315,7 +315,7 @@ int main(){
 	assert(T_RUN%T_DATA==0);
 	assert(DT<=0.2);	//We've assumed a small temporal step in the integration scheme
 	#ifdef LINEAR_SPLINE
-	assert(DT<=0.05);	//If linear spline is used, the integration is even more inestable
+	assert(DT<=0.05);	//If linear spline is used, the integration is even more 
 	#endif
 
 
