@@ -1,15 +1,43 @@
 /*
- * EW_Langevin_CUDA
- *
- *  Simulates the 1-dimensional elastic line in a disordered 2-dimensional media.	
- *  Disorder potential is choosen from a Gaussian distribution	
- *  Elastic restoring force is given by a discretized Laplacian	(elastic limit of small distortions)
- *  An uniform external field can be applied
- *  Langevin noise is simulated with a uniform random distribution
- *
- *  Created on: Feb 26, 2012
- *      Author: eze
+ * QEW_CUDA
 */
+
+/* main-QEW.cu together with its library QEW_library.cuh, is a CUDA implementation of the
+ * 1D Quenched Edwards-Wilkinson (QEW) model.
+ * The program simulates a 1-dimensional elastic line in a 2-dimensional disorder medium
+ * The disorder potential is choosen from a Gaussian or Uniform distribution
+ * Elastic restoring force is given by a discretized Laplacian	(elastic limit of small distortions)
+ * An uniform external field can be applied
+ * Langevin noise with a uniform random distribution can be optonally turned on.
+.*
+ * Started on: Feb 26, 2012 by ezeferrero
+ * Copyright (C) 2013 Ezequiel E. Ferrero, Alejandro B. Kolton and Sebastián Bustingorry.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/*
+ * This code was originally implemented for: "Nonsteady relaxation and critical exponents at the depinning transition",
+ * E.E. Ferrero, A.B. Kolton and S. Bustingorry
+ * http://arxiv.org/abs/1211.7275
+ * Phys. Rev. E 87, 032122 (2013)
+ * http://link.aps.org/doi/10.1103/PhysRevE.87.032122
+ * DOI:	10.1103/PhysRevE.87.032122
+ * The implementation is justified and benchmarked in this Supplemental Material
+ * http://pre.aps.org/supplemental/PRE/v87/i3/e032122
+ * Please cite when appropriate.
+ */
+
 
 // TODO: Not sure how many of the followin libraries are necessary
 #include <cmath>
@@ -27,11 +55,11 @@
 
 /*Parameter Definitions*/
 #ifndef LL
-#define LL 512		/* System's longitudinal size (line size) */
+#define LL 1024		/* System's longitudinal size (line size) */
 #endif
 
 #ifndef MM
-#define MM 1024		/* System's transversal size*/
+#define MM 2048		/* System's transversal size*/
 #endif
 
 #ifndef SAMPLES
@@ -65,7 +93,7 @@
 #ifndef TEMP
 #define TEMP 0.1f	/* Heat Bath temperature*/
 #endif
-#define	XTEMP sqrt(24.*TEMP/DT) 
+#define	XTEMP sqrt(24.*TEMP/DT)
 //#define XTEMP sqrt(24.*TEMP*DT)
 
 #ifndef H_START
@@ -104,10 +132,9 @@
 #define MAX(a,b) (((a)<(b))?(b):(a))	/* maximum */
 #define MIN(a,b) (((a)<(b))?(a):(b))	/* minimum */ 
 #define ABS(a) (((a)< 0)?(-a):(a))	/* absolute value */
-// Thanks to Pablo Dal Lago for pointing this out, a minor variation of
-// http://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
-#define ROUND_DOWN_POWER_OF_2(x) (( ( (x)>>0 | (x)>>1 | (x)>>2 | (x)>>3 | (x)>>4 | (x)>>5 | (x)>>6 | (x)>>7 | (x)>>8 | (x)>>9 | (x)>>10 | (x)>>11 | (x)>>12 |\
-(x)>>13 | (x)>>14 | (x)>>15 | (x)>>16 | (x)>>17 | (x)>>18 | (x)>>19 | (x)>>20 | (x)>>21 | (x)>>22 | (x)>>23 | (x)>>24 | (x)>>25 | (x)>>26) +1 ) >> 1)
+#define ROUND_DOWN_POWER_OF_2(x) (( ( (x)>>0 | (x)>>1 | (x)>>2 | (x)>>3 | (x)>>4 | (x)>>5 | (x)>>6 | (x)>>7 | (x)>>8 | \
+(x)>>9 | (x)>>10 | (x)>>11 | (x)>>12 | (x)>>13 | (x)>>14 | (x)>>15 | (x)>>16 | (x)>>17 | (x)>>18 | (x)>>19 | (x)>>20 | \
+(x)>>21 | (x)>>22 | (x)>>23 | (x)>>24 | (x)>>25 | (x)>>26) +1 ) >> 1)
 
 // Hardware parameters for GTX 470/480 (GF100)
 #define SHARED_PER_BLOCK 49152
@@ -139,13 +166,21 @@
 #define SAFE_PRIMES_FILENAME "../common/safeprimes_base32.txt"
 //#define SAFE_PRIMES_FILENAME "../common/safeprimes_base32_plus.txt"
 
+#ifdef DOUBLE_PRECISION
+typedef double FLOAT;
+typedef cufftDoubleComplex COMPLEX;
+#else
+typedef float FLOAT;
+typedef cufftComplex COMPLEX;
+#endif
+
 // State of the random number generator, last number (x_n), last carry (c_n) packed in 64 bits
 __device__ static unsigned long long d_x[NUM_THREADS];
 // multipliers (constants)
 __device__ static unsigned int d_a[NUM_THREADS];
 
 // Including our functions
-#include "EW_library.cuh"
+#include "QEW_library.cuh"
 
 int timeval_subtract (struct timeval *result, struct timeval *x, struct timeval *y);
 
@@ -196,11 +231,10 @@ void RunSample(int s, elastic_system &T){
 
 	//reloj.tac();
 	//reloj.print();
-
 	//reloj.tic();
 
 	unsigned int index=0;
-	unsigned int index1=0;
+	//unsigned int index1=0;
 	// Time loop, from 0 to T_RUN (included)
 	for(unsigned int time=0;time<T_RUN+1; time++){
 
@@ -212,7 +246,8 @@ void RunSample(int s, elastic_system &T){
 		#ifdef LOGARITHMIC
 		/* Get data logarithmically spaced*/
 		int aux = ROUND_DOWN_POWER_OF_2(time);
-		if( time==aux || ((time-aux)*2) == aux || ((time-aux)*4) == aux || ((time-aux)*8) == aux || ((time-aux)*16) == aux ){
+		if( time==aux || ((time-aux)*2) == aux || ((time-aux)*4) == aux || ((time-aux)*8) == aux || \
+		((time-aux)*16) == aux ){
 		#endif
 			/* Print Configurations if desired*/
 			/*if(s==0){
@@ -226,9 +261,11 @@ void RunSample(int s, elastic_system &T){
 			/* Calculate some quantities*/
 			if (s==0) T.TabulateTime(index,time);
 			T.CalculateAccumulateCenterOfMass(index, time);
+			#ifndef IGNORE_SF
 			T.CalculateStructureFactor();
 			T.AccumulateStructureFactor(index, time);
-			
+			#endif
+
 			/* Print Structure Factor if desired*/
 			/*if(s==0){
 				sprintf(filename, "Sk_frame%dL%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.2fdt%.2fgpu%i.dat", \
@@ -241,14 +278,7 @@ void RunSample(int s, elastic_system &T){
 			T.InterpolateDisorderSpline();
 			T.RecalculateForce(h_field, time);
 			T.CalculateAccumulateVelocity(index, time);
-/*
-			#ifdef LOGARITHMIC
-			if( time==aux ){
-			T.CalculateAccumulateVelocityHistogram(index1, time, LEFTLIMIT, RIGHTLIMIT, NBINS);
-			index1++;
-			}
-			#endif
-*/
+
 			/* Integration step*/
 			T.EulerStep(time);
 
@@ -263,25 +293,6 @@ void RunSample(int s, elastic_system &T){
 			T.EulerStep(time);
 		}
 
-		
-		/* Choose external field protocol */
-
-		//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
-		//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
-
-		//if (i<58000) h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*(i*DT-T_START_FIELD)):(H_START);
-		//if (i>=58000) h_field=-0.018;
-		
-		/*Increment it at T_START_FIELD*/
-		//if (time>=T_START_FIELD) h_field = H_START + DHDT;
-		
-		/* field pulses */
-		//h_field=(i*DT>3000)?(0.01-0.0000005*(i*DT-3000)):(0.01);
-		//h_field=(i*DT>T_START_FIELD)?(H_START+DHDT*((i/400)%2)):(H_START);
-	
-		/*constant field*/
-		// Do nothing, it stays in H_START
-
 		//CUDA_SAFE_CALL(cudaUnbindTexture(SplineTexture));
 	}
 
@@ -295,7 +306,7 @@ int main(){
 	assert(TILE%2==0);
 	assert(TILE_X%2==0);
 	assert(TILE_Y%2==0);
-	assert(FRAME1D%TILE==0);	
+	assert(FRAME1D%TILE==0);
 	assert(FRAME2D%TILE_X==0);
 	assert(FRAME2D%TILE_Y==0);
 	assert(LL%FRAME1D==0);
@@ -303,7 +314,11 @@ int main(){
 	assert(MM%FRAME2D==0);
 	assert(T_RUN%T_DATA==0);
 	assert(DT<=0.2);	//We've assumed a small temporal step in the integration scheme
-	
+	#ifdef LINEAR_SPLINE
+	assert(DT<=0.05);	//If linear spline is used, the integration is even more inestable
+	#endif
+
+
 	// Set the GPGPU computing device
 	CUDA_SAFE_CALL(cudaSetDevice(CUDA_DEVICE));
 
@@ -329,6 +344,15 @@ int main(){
 	printf("# External field: %f\n", H_START);
 	printf("# GPU used (device ID): %i\n", CUDA_DEVICE);
 	printf("# SEED used: %i\n", SEED);
+	#ifdef RF
+	printf("# RANDOM_FIELD ON");
+	#endif
+	#ifdef LINEAR_SPLINE
+	printf("# LINEAR_SPLINE ON");
+	#endif
+	#ifdef UNIFORM_DISORDER
+	printf("# UNIFORM_DISORDER ON");
+	#endif
 	#ifdef ANHARMONIC
 	printf("# ANHARMONIC ON");
 	#endif
@@ -350,10 +374,12 @@ int main(){
 		if ((s+1)%100==0){
 			/* Print partial averages of Structure Factor and Center of Mass position*/
 
+			#ifndef IGNORE_SF
 			sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.tmp",\
 			LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 			ofstream file2(filename);
 			T.PrintStructureFactorAccum(file2, s);
+			#endif
 
 			sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.tmp",\
 			LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
@@ -370,26 +396,26 @@ int main(){
 
 	/* Print final averages of Structure Factor and Center of Mass position*/
 
-	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+	#ifndef IGNORE_SF
+	sprintf(filename, "Sk_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,\
+	C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file2(filename);
 	T.PrintStructureFactorAccum(file2, SAMPLES);
 	printf("# Structure Factor averaged over %i samples in %s\n", SAMPLES, filename);
+	#endif
 
-	sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+	sprintf(filename, "CM_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,\
+	C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file3(filename);
 	T.PrintCenterOfMassAccum(file3, SAMPLES);
 	printf("# Center of Mass position averaged over %i samples in %s\n", SAMPLES, filename);
 
-	sprintf(filename, "V_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
+	sprintf(filename, "V_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,\
+	C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
 	ofstream file4(filename);
 	T.PrintVelocityAccum(file4, SAMPLES);
 	printf("# Center of Mass velocity aveaged over %i samples in %s\n", SAMPLES, filename);
 
-/*	sprintf(filename, "HV_L%iM%iS%iTr%iTd%iT%.2fb%.2fe%.2fh%.3fdt%.2fgpu%i.dat",LL,MM,SAMPLES,T_RUN,T_DATA,TEMP,C_BETA,C_EPSILON,H_START,DT,CUDA_DEVICE);
-	ofstream file5(filename);
-	T.PrintVelocityHistogramAccum(file5, SAMPLES, LEFTLIMIT, RIGHTLIMIT);
-	printf("# Velocity distribution histogram aveaged over %i samples in %s\n", SAMPLES, filename);
-*/
 	// Stop timer
 	gettimeofday(&end,NULL);
 	timeval_subtract(&elapsed, &end, &start);

@@ -2,25 +2,25 @@
 BIN = main-QEW
 
 # Pathts & Includes
-#CUDA_INSTALL_PATH       = /usr/local/cuda
-CUDA_INSTALL_PATH       ?= /usr
-CUDASDK_INSTALL_PATH    = /opt/cudasdk
-CUDA_LIB_PATH           = $(CUDA_INSTALL_PATH)/lib64
-CUDASDK_LIB_PATH        = $(CUDASDK_INSTALL_PATH)/C/lib64
+CUDA_INSTALL_PATH	= /usr/local/cuda
+#CUDA_INSTALL_PATH	?= /usr
+CUDASDK_INSTALL_PATH	= /opt/cudasdk
+CUDA_LIB_PATH		= $(CUDA_INSTALL_PATH)/lib
+CUDASDK_LIB_PATH	= $(CUDASDK_INSTALL_PATH)/C/lib
 INCLUDES += -I. -I$(CUDA_INSTALL_PATH)/include -I$(CUDASDK_INSTALL_PATH)/C/common/inc -I$(CUDASDK_INSTALL_PATH)/shared/inc 
 # -I/home/ferrero/cuda_libraries/
 
 # Flags
-LIBS                    = -L$(CUDA_LIB_PATH) -L$(CUDASDK_LIB_PATH)
-CFLAGS                  = -O3 
+LIBS			= -L$(CUDA_LIB_PATH) -L$(CUDASDK_LIB_PATH)
+CFLAGS			= -O3 
 #CFLAGS			= -O -g
-LDFLAGS                 = -lrt -lm -lcudart -lcufft 
-NVCC_FLAGS              = -O3 -arch=sm_20 --ptxas-options=-v --use_fast_math -ftz=true 
+LDFLAGS			= -lrt -lm -lcudart -lcufft 
+NVCC_FLAGS		= -O3 -arch=sm_20 --use_fast_math #-ftz=true --ptxas-options=-v 
 
 # Default Values
 SAMPLES			= 1000
-L			= 512
-M			= 512
+L			= 1024
+M			= 2048
 #T_RUN=2^T_RUN_EXP
 T_RUN_EXP		= 16
 T_RUN			= 65536
@@ -33,13 +33,13 @@ C_EPSILON		= 1.f
 H_START			= 1.294f
 DT			= 0.025f
 CUDA_DEVICE		= 0
-OFILE                   = [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
+OFILE			= [EW,$(L),$(M),$(SAMPLES),$(T_RUN),$(T_DATA),$(TEMP),$(C_BETA),$(C_EPSILON),$(H_START),$(DT),GPU$(CUDA_DEVICE)].dat
 
-# Simulation Parameters
+# Simulation Parameters & Compilation Options
 PARAMETERS		= -DLL=$(L) -DMM=$(M) -DSAMPLES=$(SAMPLES) -DT_RUN_EXP=$(T_RUN_EXP) -DT_RUN=$(T_RUN) -DT_DATA=$(T_DATA) \
 			-DTEMP=$(TEMP) -DC_BETA=$(C_BETA) -DC_EPSILON=$(C_EPSILON) \
-			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING) \
-			-DCUDA_DEVICE=$(CUDA_DEVICE) -DZEROTEMP -DANHARMONIC
+			-DH_START=$(H_START) -DDT=$(DT) -D$(SPACING) -DCUDA_DEVICE=$(CUDA_DEVICE) \
+			-DZEROTEMP #-DLINEAR_SPLINE #-DRF #-DUNIFORM_DISORDER #-DIGNORE_SF #-DANHARMONIC
 
 # Compilers
 NVCC                    = $(CUDA_INSTALL_PATH)/bin/nvcc
