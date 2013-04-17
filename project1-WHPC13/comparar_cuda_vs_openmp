@@ -1,0 +1,4 @@
+g++ -O2 -o qew_OMP.out qew_minimal.cpp -fopenmp -DTHRUST_DEVICE_BACKEND=THRUST_DEVICE_BACKEND_OMP -lgomp -I/usr/local/cuda-5.0/include -I ./include/
+nvcc -arch sm_21 -O2 -o qew_CUDA.out qew_minimal.cu -I./include
+
+
